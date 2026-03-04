@@ -4,12 +4,12 @@ Pipeline automático para **traducir apuntes en Markdown** a múltiples idiomas 
 
 ## Características
 
-- **Traducción automática** multi-idioma con soporte para múltiples proveedores (DeepL API, Azure AI Translator).
-- **Generación en Google Docs** directamente a tu Google Drive, con formato nativo, listas reales, y RTL/BiDi perfecto.
-- **Generación de DOCX local** con formato académico (Times New Roman, márgenes, numeración).
+- **Traducción automática** multi-idioma con **Fallbacks Dinámicos**: Si una API falla (ej. Cuota de DeepL), salta automáticamente a la siguiente (Azure AI Translator) sin interrumpir el proceso.
+- **Generación en Google Docs** directamente a tu Google Drive, con formato nativo, listas reales, y RTL/BiDi perfecto (Alineación a la derecha real).
+- **Generación de DOCX local** con formato académico (Times New Roman, márgenes, numeración, RTL nativo).
 - **Generación de PDF local** vía LibreOffice (sin APIs externas).
 - **CLI Interactivo** súper fácil de usar para seleccionar origen, proveedor, formato de salida e idiomas.
-- **Soporte RTL robusto** para árabe y tipografía CJK para chino.
+- **Configuración Abstraída**: Comportamiento personalizable (organización en carpetas, nombres secuenciales, idiomas por defecto) mediante `config.json`.
 
 ## Estructura
 
@@ -22,7 +22,7 @@ Pipeline automático para **traducir apuntes en Markdown** a múltiples idiomas 
 │   └── pdf_converter.py          # Script de LibreOffice
 ├── sources/                      # Archivos .md de entrada
 ├── public/
-│   └── header.png                # Imagen de cabecera para los documentos
+│   └── header.png                # Imagen opcional de cabecera
 ├── secrets/                      # Credenciales de Google Auth y Tokens (gitignored)
 ├── translated/                   # Salida generada (gitignored)
 │   ├── es/es.md + es.docx + es.pdf
@@ -30,9 +30,10 @@ Pipeline automático para **traducir apuntes en Markdown** a múltiples idiomas 
 │   ├── fr/fr.md + fr.docx + fr.pdf
 │   ├── ar/ar.md + ar.docx + ar.pdf
 │   └── zh/zh.md + zh.docx + zh.pdf
-├── run_pipeline.sh               # Script de ejecución
+├── run_pipeline.sh               # Script de ejecución interactivo
+├── config.example.json           # Plantilla de configuración de usuario
 ├── requirements.txt
-└── .env                          # API key de DeepL (no versionado)
+└── .env                          # API keys (no versionado)
 ```
 
 ## Instalación
@@ -63,6 +64,20 @@ Si quieres que el sistema genere documentos con formato perfecto (especialmente 
 4. Descarga el JSON y guárdalo como `secrets/credentials.json`.
 5. La primera vez que lo ejecutes con Google Docs activado se abrirá tu navegador para pedirte permiso y se generará el `token.json` automático.
 
+## Configuración de Usuario (`config.json`)
+
+Para personalizar cómo se comportan los archivos (especialmente en Drive), copia `config.example.json` a `config.json` (ignorado por git). 
+
+**Características principales:**
+- `organize_by_language`: Si es `true`, creará subcarpetas en Drive usando los nombres definidos en `language_folder_names`.
+- `sequential_naming`: Si es `true`, leerá la carpeta y nombrará el siguiente archivo secuencialmente en base al patrón establecido en `sequential_naming_pattern`.
+- `sequential_naming_pattern`: Permite establecer el patrón de nombres automáticos en Drive. Puedes usar cualquier string y las etiquetas mágicas:
+  - `{n}`: Número secuencial autocalculado (1, 2, 3...)
+  - `{title}`: Nombre original del archivo `.md` (sin extensión)
+  - `{lang}`: Código del idioma en mayúsculas (EN, AR, ES...)
+  - Ejemplo: `"{n} - {title} ({lang})"` -> `1 - apuntes (EN)`
+- `header_image`: Ruta relativa a la imagen de cabecera (opcional).
+
 ## Uso
 
 La forma más sencilla y recomendada de lanzar el sistema es usando la interfaz interactiva `run_pipeline.sh`. Te hará unas preguntas rápidas antes de empezar:
@@ -90,11 +105,13 @@ python src/translation_pipeline.py sources/apuntes.md --provider azure --google 
 python src/translation_pipeline.py sources/apuntes.md --langs EN-GB FR AR
 ```
 
-## API Keys
+## API Keys y Proveedores (Escalabilidad)
 
 Consulta el archivo `.env.example` para la lista completa de variables. 
-- Puedes usar **DeepL** (plan gratuito o Pro).
-- Puedes usar **Azure AI Translator** (necesitas Key y Región en el `.env`).
+1. **DeepL API** (Requiere `DEEPL_API_KEY`)
+2. **Azure AI Translator** (Requiere `AZURE_TRANSLATOR_KEY` y `AZURE_TRANSLATOR_REGION`)
+
+El sistema implementa un **Registro Dinámico**: Si en el futuro quieres añadir otra API (ej. OpenAI), solo tienes que crear su clase en `translators.py` y añadirla a `AVAILABLE_TRANSLATORS`. El menú CLI (`run_pipeline.sh`) detectará automáticamente qué APIs tienen configurada su clave en el `.env` y te las ofrecerá, ordenando los fallbacks inteligentemente según tu selección.
 
 ## Generación de PDF
 

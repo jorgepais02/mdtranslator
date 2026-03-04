@@ -280,6 +280,7 @@ def process_source_file(md_path: Path, langs: list[str], translator, use_google:
                 organize_by_language=CONFIG.get("drive", {}).get("organize_by_language", False),
                 sequential_naming=CONFIG.get("drive", {}).get("sequential_naming", False),
                 lang_folder_names=CONFIG.get("drive", {}).get("language_folder_names"),
+                sequential_naming_pattern=CONFIG.get("drive", {}).get("sequential_naming_pattern")
             )
             # Setup layout: Header with image + Footer with page numbers
             header_cfg = CONFIG.get("document", {}).get("header_image")
@@ -338,6 +339,7 @@ def process_source_file(md_path: Path, langs: list[str], translator, use_google:
                     organize_by_language=CONFIG.get("drive", {}).get("organize_by_language", False),
                     sequential_naming=CONFIG.get("drive", {}).get("sequential_naming", False),
                     lang_folder_names=CONFIG.get("drive", {}).get("language_folder_names"),
+                    sequential_naming_pattern=CONFIG.get("drive", {}).get("sequential_naming_pattern")
                 )
                 # Setup layout: Header with image + Footer with page numbers
                 header_cfg = CONFIG.get("document", {}).get("header_image")

@@ -127,11 +127,13 @@ class GoogleDocsManager:
 
     def create_document(self, title: str, folder_id: str | None = None, lang: str = "es",
                          organize_by_language: bool = False, sequential_naming: bool = False,
-                         lang_folder_names: dict | None = None) -> str:
+                         lang_folder_names: dict | None = None,
+                         sequential_naming_pattern: str | None = None) -> str:
         """Create a new Google Doc.
         
         If organize_by_language=True and folder_id is set, creates language subfolders.
-        If sequential_naming=True, names documents 1, 2, 3... inside the target folder.
+        If sequential_naming=True, names documents according to sequential_naming_pattern 
+        (e.g "{n} - {title}"), or simply "1", "2" if no pattern is provided.
         Otherwise uses the original title.
         """
         doc_name = title
@@ -144,7 +146,13 @@ class GoogleDocsManager:
             target_folder_id = self.get_or_create_subfolder(folder_id, lang_folder_name)
 
         if target_folder_id and sequential_naming:
-            doc_name = self.get_next_sequential_name(target_folder_id)
+            next_num = self.get_next_sequential_name(target_folder_id)
+            if sequential_naming_pattern:
+                doc_name = sequential_naming_pattern.replace("{n}", next_num)
+                doc_name = doc_name.replace("{title}", title)
+                doc_name = doc_name.replace("{lang}", lang.upper())
+            else:
+                doc_name = next_num
 
         file_metadata = {
             'name': doc_name,
@@ -217,29 +225,11 @@ class GoogleDocsManager:
                 }
             })
 
-        # 3. Create Footer with Page Number (REST API v1 doesn't support native dynamic Page Numbers from scratch)
-        footer_resp = self.docs_service.documents().batchUpdate(
-            documentId=doc_id,
-            body={'requests': [{'createFooter': {'type': 'DEFAULT'}}]}
-        ).execute()
-        footer_id = footer_resp['replies'][0]['createFooter']['footerId']
-        
-        # We revert to simple text "Página 1" since insertPageNumber field is not supported in v1 REST API
-        requests.append({
-            'insertText': {
-                'location': {'segmentId': footer_id, 'index': 0},
-                'text': '1'
-            }
-        })
+        # Note: Google Docs REST API v1 currently does not support dynamic page numbers
+        # (there is no native InsertPageNumberRequest). Any static text inserted here 
+        # (like '1') would repeat on every page without incrementing.
+        # So we skip adding a footer altogether for now.
 
-        # Align the entire footer
-        requests.append({
-            'updateParagraphStyle': {
-                'range': {'segmentId': footer_id, 'startIndex': 0, 'endIndex': 1},
-                'paragraphStyle': {'alignment': 'END' if not is_rtl else 'START'},
-                'fields': 'alignment'
-            }
-        })
 
         # 4. Set Document-wide RTL at section level
         if is_rtl:

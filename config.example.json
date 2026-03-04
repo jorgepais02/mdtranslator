@@ -2,10 +2,16 @@
   "drive": {
     "organize_by_language": false,
     "sequential_naming": false,
+    "sequential_naming_pattern": "{n} - {title}. {lang}",
     "language_folder_names": {}
   },
   "document": {
     "header_image": null,
-    "default_languages": ["EN", "FR", "AR", "ZH"]
+    "default_languages": [
+      "EN",
+      "FR",
+      "AR",
+      "ZH"
+    ]
   }
 }
