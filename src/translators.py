@@ -3,14 +3,7 @@ import sys
 import requests
 from abc import ABC, abstractmethod
 
-# DeepL code → short filename code
-LANG_MAP = {
-    "EN-GB": "en",
-    "FR":    "fr",
-    "AR":    "ar",
-    "ZH":    "zh",
-}
-DEFAULT_LANGS = list(LANG_MAP.keys())
+# Legacy language mappings removed in favor of config.json
 
 
 class TranslationError(Exception):
@@ -176,41 +169,74 @@ class FallbackTranslator(BaseTranslator):
         )
 
 
-def get_translator(provider: str) -> BaseTranslator:
-    """Factory to return the correctly configured translator.
+# Registry of all supported translation providers
+AVAILABLE_TRANSLATORS = {
+    "deepl": ("DeepL API", DeepLTranslator),
+    "azure": ("Azure AI Translator", AzureTranslator),
+}
 
-    If *provider* is ``'auto'``, builds a :class:`FallbackTranslator` using
-    every provider whose API key is present in the environment (DeepL first,
-    then Azure).  Falls back gracefully when only one key is available.
+def get_available_translators() -> list[dict]:
+    """Return a list of available translators based on environment variables."""
+    available = []
+    for key, (name, cls) in AVAILABLE_TRANSLATORS.items():
+        try:
+            # Instantiate to check if API key exists and is valid
+            cls()
+            available.append({"id": key, "name": name})
+        except TranslationError:
+            pass
+    return available
+
+def get_translator(fallback_order: list[str] | str) -> BaseTranslator:
+    """Factory to return a FallbackTranslator based on the requested priority order.
+    
+    If priority order is empty or 'auto', uses all available in default order.
     """
-    provider = provider.lower()
-
-    if provider == "auto":
-        translators: list[BaseTranslator] = []
-        # Try DeepL first
-        if os.getenv("DEEPL_API_KEY", ""):
+    if isinstance(fallback_order, str):
+        fallback_order = [fallback_order]
+        
+    if not fallback_order or fallback_order[0].lower() == "auto":
+        fallback_order = list(AVAILABLE_TRANSLATORS.keys())
+        
+    translators: list[BaseTranslator] = []
+    
+    # Priority order first
+    for provider_id in fallback_order:
+        provider_id = provider_id.lower()
+        if provider_id in AVAILABLE_TRANSLATORS:
+            _, cls = AVAILABLE_TRANSLATORS[provider_id]
             try:
-                translators.append(DeepLTranslator())
+                translators.append(cls())
             except TranslationError:
                 pass
-        # Then Azure
-        if os.getenv("AZURE_TRANSLATOR_KEY", ""):
+                
+    # Append any available providers that weren't explicitly requested
+    for provider_id, (_, cls) in AVAILABLE_TRANSLATORS.items():
+        if provider_id not in [p.lower() for p in fallback_order]:
             try:
-                translators.append(AzureTranslator())
+                translator = cls()
+                # Check if we already instantiated it
+                if not any(isinstance(t, cls) for t in translators):
+                    translators.append(translator)
             except TranslationError:
                 pass
-        if not translators:
-            raise TranslationError(
-                "No translation provider configured. "
-                "Set DEEPL_API_KEY or AZURE_TRANSLATOR_KEY in your .env file."
-            )
-        if len(translators) == 1:
-            return translators[0]
-        return FallbackTranslator(translators)
 
-    if provider == "deepl":
-        return DeepLTranslator()
-    elif provider == "azure":
-        return AzureTranslator()
-    else:
-        raise ValueError(f"Unknown translation provider: {provider}")
+    if not translators:
+        raise TranslationError(
+            "No translation provider configured or valid. "
+            "Please add an API key (e.g. DEEPL_API_KEY) to your .env file."
+        )
+
+    if len(translators) == 1:
+        return translators[0]
+        
+    return FallbackTranslator(translators)
+
+if __name__ == "__main__":
+    # Provides JSON output for the bash script to dynamically build CLI menus
+    import json
+    # Load dotenv in case it's called directly from CLI
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    print(json.dumps(get_available_translators()))

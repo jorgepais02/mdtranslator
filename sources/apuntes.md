@@ -1,114 +1,152 @@
-# Killing the Kill-Chain (V): Caso práctico y recomendaciones finales
+# DAOs: El advenimiento de la democracia real (II)
 
-## Caso práctico: Compromiso completo de un Directorio Activo
+## Tipologías de DAOs
 
-Se presenta un escenario real basado en auditorías internas que ilustra una Kill Chain completa en un entorno Windows con Active Directory.
+No existe una clasificación oficial de organizaciones autónomas descentralizadas. Sin embargo, pueden agruparse según sus características y aplicaciones.
 
-La infraestructura se segmenta en:
+En la mayoría de las DAOs existe un token nativo que concede poder de voto. El peso del voto suele depender de la cantidad de tokens que posee cada participante.
 
-- Red del atacante.
-- Red de estaciones de trabajo.
-- Red de servidores.
+### Protocol DAOs
 
-### Acceso inicial
+En este tipo de organizaciones, los tokens se utilizan para votar cambios en el funcionamiento de un protocolo blockchain.
 
-El atacante obtiene credenciales filtradas o adquiridas en mercados ilegales. Comprueba su validez y accede a la VPN corporativa como usuario de dominio sin privilegios.
+Ejemplos destacados:
 
-### Escalada de privilegios local
+- MakerDAO, creadora de la stablecoin DAI respaldada por criptomonedas.
+- Uniswap, un exchange descentralizado donde la comunidad decide sobre los pools de liquidez y otros parámetros del sistema.
 
-Ya dentro de la red de estaciones de trabajo, el objetivo es obtener privilegios de administrador local. Posibles vectores:
+### Investment DAOs
 
-- Acceso físico a un equipo sin disco cifrado.
-- Explotación de vulnerabilidades locales.
-- Descubrimiento de contraseñas almacenadas de forma insegura.
+También denominadas Venture DAOs, se orientan a la inversión colectiva en proyectos de finanzas descentralizadas y otros mercados digitales.
 
-Una vez alcanzado el rol de administrador local, puede acceder a información sensible del sistema.
+Permiten reunir capital entre múltiples participantes y tomar decisiones de inversión de forma colectiva.
 
-### Movimiento lateral hacia servidores
+Estas estructuras eliminan figuras tradicionales como gestores, auditores o depositarios, ya que la información y las operaciones se registran directamente en el código.
 
-El atacante extrae credenciales almacenadas en caché. Si encuentra credenciales de administradores que hayan iniciado sesión previamente, puede pivotar hacia la red de servidores.
+Ejemplo:
 
-En esta red se encuentran activos críticos y cuentas con mayores privilegios.
+- Metacart Ventures.
 
-### Compromiso del dominio
+### Collector DAOs
 
-Mediante la extracción progresiva de credenciales en servidores, el atacante puede alcanzar cuentas con privilegios de Domain Admin.
+Se centran en la adquisición y gestión de arte digital, especialmente NFTs.
 
-Con este acceso llega al Domain Controller, el activo más crítico del entorno.
+Permiten que múltiples participantes inviertan conjuntamente en obras digitales o activos culturales.
 
-### Persistencia y explotación masiva
+Este modelo reduce la barrera de entrada para inversores que no podrían adquirir obras de alto valor de forma individual.
 
-Una vez comprometido el controlador de dominio:
+Ejemplos:
 
-- Se vuelcan credenciales de todos los usuarios.
-- Se crackean contraseñas débiles.
-- Se obtiene la cuenta asociada al TGT de Kerberos.
-- Se genera un Golden Ticket con persistencia prolongada.
+- Flamingo
+- PleasrDAO
+- Squiggle DAO
 
-Para invalidar un Golden Ticket es necesario restablecer la contraseña de Kerberos en dos ocasiones consecutivas.
+### Service DAOs
 
-### Exfiltración e impacto
+Funcionan como agregadores de talento en forma de equipos de trabajo descentralizados.
 
-El atacante puede descifrar secretos almacenados en navegadores y acceder a cuentas corporativas. Esto permite:
+Los miembros colaboran en proyectos técnicos o creativos y reciben tokens como compensación por sus contribuciones.
 
-- Exfiltrar información confidencial.
-- Robar documentación técnica.
-- Realizar extorsión bajo amenaza de publicación.
+En algunos casos se plantea que estas organizaciones puedan sustituir a ciertos modelos tradicionales de intermediación laboral.
 
-El objetivo final suele ser económico o estratégico.
+Ejemplos:
 
-## Recomendaciones fundamentales de seguridad
+- Raid Guild
+- DXdao
+- PartyDAO
 
-### Segmentación de comunicaciones
+### Social DAOs
 
-Limitar la comunicación entre estaciones de trabajo y entre clientes y servidores.
+Agrupan comunidades que comparten intereses, valores o actividades comunes.
 
-### Filtrado de salida
+La gobernanza se realiza de forma colectiva mediante votaciones de los miembros.
 
-Restringir conexiones salientes desde servidores para evitar exfiltración y autenticaciones externas maliciosas.
+Ejemplos:
 
-### Evitar almacenamiento de credenciales
+- Friends with Benefits
+- Seed Club
+- Cabin
 
-Impedir el cacheo de credenciales en equipos de usuario.
+### Grants o Charity DAOs
 
-### Gestión periódica de Kerberos
+Se orientan a financiar proyectos o iniciativas sociales mediante mecanismos de financiación colectiva.
 
-Restablecer periódicamente la cuenta TGT y realizar doble cambio para invalidar posibles tickets fraudulentos.
+La asignación de fondos se decide mediante votaciones de la comunidad, lo que proporciona un alto nivel de transparencia sobre el destino de los recursos.
 
-### Control de acceso a documentos sensibles
+Ejemplos:
 
-Aplicar políticas que eviten lectura no autorizada incluso en caso de publicación accidental.
+- MolochDAO
+- iniciativas benéficas vinculadas a Uniswap, Aave o Compound.
 
-### Reducción de superficie de ataque
+### Entertainment DAOs
 
-Limitar servicios, protocolos y puertos abiertos.
+Permiten que los miembros participen en decisiones creativas relacionadas con proyectos culturales o de entretenimiento.
 
-### Auditoría continua
+Los participantes pueden influir en aspectos como el desarrollo narrativo, personajes o estrategias del proyecto.
 
-Revisar cuentas, grupos y privilegios de forma periódica.
+Un ejemplo conocido es Bored Ape Yacht Club, donde la posesión de determinados NFTs concede derechos de participación en decisiones creativas.
 
-### Control de aplicaciones
+### Media DAOs
 
-Implementar mecanismos que restrinjan la ejecución de software no autorizado.
+Se centran en la producción de contenidos digitales gestionados por la comunidad.
 
-### Sistemas trampa
+Los creadores reciben tokens por la generación de contenido, mientras que la comunidad vota qué contenidos deben ser recompensados.
 
-Desplegar honeypots o honey tokens para detectar actividad maliciosa temprana.
+Ejemplos:
 
-### Protección de sesiones
+- Forefront
+- Darkstar DAO
 
-Evitar la enumeración remota de sesiones activas.
+### Plataformas para crear DAOs
 
-### Protección de procesos críticos
+Existen proyectos que ofrecen herramientas para crear y gestionar DAOs sin necesidad de conocimientos avanzados de programación.
 
-Asegurar procesos donde se almacenan credenciales de dominio.
+Ejemplos:
 
-### Deshabilitar administradores locales
+- Aragon
+- Colony
+- Orca
 
-Evitar el uso de cuentas administrativas locales en estaciones de trabajo y servidores.
+## Caso histórico: The DAO (2016)
 
-## Conclusión
+Uno de los episodios más relevantes en la historia de las DAOs ocurrió en 2016 con el proyecto conocido como The DAO.
 
-El compromiso total de un dominio suele ser consecuencia de múltiples fallos encadenados.
+Este proyecto de inversión basado en Ethereum fue lanzado por Simon y Christoph Jentzsch y logró recaudar aproximadamente 150 millones de dólares de unos 11.000 inversores.
 
-La combinación de segmentación, control de privilegios, auditoría continua, cifrado y monitorización reduce significativamente la probabilidad de que un atacante complete toda la Kill Chain.
+### Vulnerabilidad del contrato inteligente
+
+En junio de 2016 se descubrió una vulnerabilidad en el contrato inteligente del proyecto.
+
+Un atacante explotó este fallo para transferir progresivamente alrededor de 50 millones de dólares hacia una cuenta bajo su control.
+
+### Debate filosófico
+
+El incidente generó un intenso debate en la comunidad blockchain sobre el principio conocido como "el código es la ley".
+
+Según esta idea, si el comportamiento estaba permitido por el código del contrato inteligente, no se trataría estrictamente de un robo.
+
+El atacante argumentó que las reglas del sistema permitían esa operación y que la naturaleza inmutable de la blockchain impedía revertirla.
+
+### Intervención de la comunidad
+
+El contrato inteligente incluía un periodo de bloqueo de 28 días para retirar los fondos, lo que dio tiempo a la comunidad para analizar posibles soluciones.
+
+Un grupo de hackers éticos denominado Robin Hood Group utilizó la misma vulnerabilidad para recuperar una gran parte de los fondos restantes y protegerlos en una nueva DAO.
+
+### Hard fork de Ethereum
+
+La comunidad de Ethereum se dividió entre dos posiciones.
+
+Algunos miembros defendían no intervenir para preservar el principio de inmutabilidad de la blockchain.
+
+Otros consideraban necesario intervenir para recuperar los fondos sustraídos.
+
+Finalmente, tras una votación en la que aproximadamente el 97 % se mostró a favor, se ejecutó un hard fork el 20 de julio de 2016.
+
+Este cambio permitió revertir las transacciones asociadas al ataque.
+
+La cadena resultante se convirtió en la actual red Ethereum, mientras que la cadena original continuó existiendo bajo el nombre Ethereum Classic.
+
+### Impacto
+
+El incidente tuvo un impacto significativo en el ecosistema de criptomonedas, generando una caída aproximada del 60 % en el valor del mercado en ese momento y provocando un debate profundo sobre la gobernanza y la confianza en la tecnología blockchain.

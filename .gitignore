@@ -11,6 +11,7 @@ secrets/
 .token.json
 
 to-do.md
+config.json
 
 # macOS
 .DS_Store

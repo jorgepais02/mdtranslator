@@ -125,23 +125,25 @@ class GoogleDocsManager:
         
         return str(count + 1)
 
-    def create_document(self, title: str, folder_id: str | None = None, lang: str = "es") -> str:
-        """Create a new Google Doc, optionally directly inside a Drive subfolder based on the language.
-        If a parent folder_id is provided, it creates a subfolder for the language (e.g. 'Español')
-        and names the document sequentially (1, 2, 3...).
+    def create_document(self, title: str, folder_id: str | None = None, lang: str = "es",
+                         organize_by_language: bool = False, sequential_naming: bool = False,
+                         lang_folder_names: dict | None = None) -> str:
+        """Create a new Google Doc.
+        
+        If organize_by_language=True and folder_id is set, creates language subfolders.
+        If sequential_naming=True, names documents 1, 2, 3... inside the target folder.
+        Otherwise uses the original title.
         """
         doc_name = title
         target_folder_id = folder_id
 
-        if folder_id:
-            # Determine Spanish name for the language
+        if folder_id and organize_by_language:
+            names = lang_folder_names or LANG_NAMES
             lang_key = lang.lower()
-            lang_folder_name = LANG_NAMES.get(lang_key, lang.upper())
-            
-            # Get or create the subfolder
+            lang_folder_name = names.get(lang_key, lang.upper())
             target_folder_id = self.get_or_create_subfolder(folder_id, lang_folder_name)
-            
-            # Determine sequential document name
+
+        if target_folder_id and sequential_naming:
             doc_name = self.get_next_sequential_name(target_folder_id)
 
         file_metadata = {
@@ -176,7 +178,7 @@ class GoogleDocsManager:
         
         return file
 
-    def setup_document_layout(self, doc_id: str, header_image_path: Path | None = None, is_rtl: bool = False):
+    def setup_document_layout(self, doc_id: str, header_image_path: Path | None = None, is_rtl: bool = False, lang: str = "es"):
         """Setup headers, footers (page numbers), and RTL section settings."""
         requests = []
         
@@ -215,27 +217,25 @@ class GoogleDocsManager:
                 }
             })
 
-        # 3. Create Footer with Page Number
+        # 3. Create Footer with Page Number (REST API v1 doesn't support native dynamic Page Numbers from scratch)
         footer_resp = self.docs_service.documents().batchUpdate(
             documentId=doc_id,
             body={'requests': [{'createFooter': {'type': 'DEFAULT'}}]}
         ).execute()
         footer_id = footer_resp['replies'][0]['createFooter']['footerId']
         
-        # Insert simple static text instead
+        # We revert to simple text "Página 1" since insertPageNumber field is not supported in v1 REST API
         requests.append({
             'insertText': {
-                'location': {
-                    'segmentId': footer_id,
-                    'index': 0
-                },
-                'text': 'Página '
+                'location': {'segmentId': footer_id, 'index': 0},
+                'text': '1'
             }
         })
+
         # Align the entire footer
         requests.append({
             'updateParagraphStyle': {
-                'range': {'segmentId': footer_id, 'startIndex': 0, 'endIndex': 7}, # length of "Página "
+                'range': {'segmentId': footer_id, 'startIndex': 0, 'endIndex': 1},
                 'paragraphStyle': {'alignment': 'END' if not is_rtl else 'START'},
                 'fields': 'alignment'
             }
@@ -438,7 +438,7 @@ class GoogleDocsManager:
                     'range': {'startIndex': 1, 'endIndex': 1 + total_len},
                     'paragraphStyle': {
                         'direction': 'RIGHT_TO_LEFT',
-                        'alignment': 'END',
+                        'alignment': 'START',
                         'spaceBelow': {'magnitude': 8, 'unit': 'PT'},
                         'spaceAbove': {'magnitude': 0, 'unit': 'PT'},
                         'lineSpacing': 130
@@ -476,11 +476,12 @@ class GoogleDocsManager:
                         'range': {'startIndex': start, 'endIndex': end},
                         'paragraphStyle': {
                             'namedStyleType': named_style,
-                            'alignment': 'CENTER' if level == 1 else ('END' if is_rtl else 'START'),
+                            'alignment': 'CENTER' if level == 1 else 'START',
+                            'direction': 'RIGHT_TO_LEFT' if is_rtl else 'LEFT_TO_RIGHT',
                             'spaceBelow': {'magnitude': space_below, 'unit': 'PT'},
                             'spaceAbove': {'magnitude': space_above, 'unit': 'PT'}
                         },
-                        'fields': 'namedStyleType,alignment,spaceBelow,spaceAbove'
+                        'fields': 'namedStyleType,alignment,direction,spaceBelow,spaceAbove'
                     }
                 })
                 requests_list.append({
@@ -497,10 +498,12 @@ class GoogleDocsManager:
                         'range': {'startIndex': start, 'endIndex': end},
                         'paragraphStyle': {
                             'indentStart': {'magnitude': 36, 'unit': 'PT'},
+                            'direction': 'RIGHT_TO_LEFT' if is_rtl else 'LEFT_TO_RIGHT',
+                            'alignment': 'START',
                             'spaceBelow': {'magnitude': 4, 'unit': 'PT'},
                             'spaceAbove': {'magnitude': 4, 'unit': 'PT'},
                         },
-                        'fields': 'indentStart,spaceBelow,spaceAbove'
+                        'fields': 'indentStart,direction,alignment,spaceBelow,spaceAbove'
                     }
                 })
                 requests_list.append({
@@ -524,8 +527,10 @@ class GoogleDocsManager:
                         'range': {'startIndex': start, 'endIndex': end},
                         'paragraphStyle': {
                             'indentStart': {'magnitude': 36, 'unit': 'PT'},
+                            'direction': 'RIGHT_TO_LEFT' if is_rtl else 'LEFT_TO_RIGHT',
+                            'alignment': 'START',
                         },
-                        'fields': 'indentStart'
+                        'fields': 'indentStart,direction,alignment'
                     }
                 })
             
@@ -551,7 +556,7 @@ class GoogleDocsManager:
                         'range': {'startIndex': start, 'endIndex': end},
                         'paragraphStyle': {
                             'direction': 'RIGHT_TO_LEFT',
-                            'alignment': 'END'
+                            'alignment': 'START'
                         },
                         'fields': 'direction,alignment'
                     }

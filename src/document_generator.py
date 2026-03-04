@@ -30,7 +30,23 @@ from docx.shared import Pt, RGBColor, Cm
 # ═══════════════════════════════════════════
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-HEADER_IMAGE = PROJECT_ROOT / "public" / "header.png"
+# Load config for header image
+import json
+
+def _load_config() -> dict:
+    config_path = PROJECT_ROOT / "config.json"
+    if not config_path.exists():
+        config_path = PROJECT_ROOT / "config.example.json"
+    if config_path.exists():
+        try:
+            return json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+CONFIG = _load_config()
+header_cfg = CONFIG.get("document", {}).get("header_image")
+HEADER_IMAGE = (PROJECT_ROOT / header_cfg) if header_cfg else None
 
 # Languages that use right-to-left script
 RTL_LANGS = {"ar", "he", "fa", "ur"}
@@ -118,10 +134,6 @@ def configure_base_typography(doc: Document, lang: str = "es") -> None:
             bidi = OxmlElement("w:bidi")
             bidi.set(qn("w:val"), "1")
             pPr.append(bidi)
-            
-            jc = OxmlElement("w:jc")
-            jc.set(qn("w:val"), "right")
-            pPr.append(jc)
 
 
 # ═══════════════════════════════════════════
@@ -140,14 +152,11 @@ def _set_paragraph_rtl(p) -> None:
     else:
         bidi.set(qn("w:val"), "1")
     
-    # Also set justification to RIGHT explicitly at XML level for better compatibility
+    # Remove any explicit jc (justification) — bidi=1 naturally right-aligns
+    # Setting jc=right with bidi confuses some renderers (Google Docs import, Pages)
     jc = pPr.find(qn("w:jc"))
-    if jc is None:
-        jc = OxmlElement("w:jc")
-        jc.set(qn("w:val"), "right")
-        pPr.append(jc)
-    else:
-        jc.set(qn("w:val"), "right")
+    if jc is not None:
+        pPr.remove(jc)
 
 
 def _set_run_rtl(run, font_name: str | None = None) -> None:
@@ -174,7 +183,8 @@ def _apply_rtl_if_needed(p, lang: str) -> None:
     if not _is_rtl(lang):
         return
     _set_paragraph_rtl(p)
-    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    # Do NOT set p.alignment = RIGHT here — bidi handles alignment naturally.
+    # Setting jc=right with bidi can confuse renderers.
     font_name = _resolve_font(lang)
     for run in p.runs:
         _set_run_rtl(run, font_name)
@@ -214,7 +224,8 @@ def format_body_paragraph(p, lang: str = "es") -> None:
     """Apply body-text formatting to a paragraph."""
     font_name = _resolve_font(lang)
     p.style = "Normal"
-    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if _is_rtl(lang) else WD_ALIGN_PARAGRAPH.JUSTIFY
+    p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY if not _is_rtl(lang) else None
+    # For RTL, bidi handles alignment naturally — don't set alignment explicitly
     
     line_spacing = 1.3 if _is_rtl(lang) else 1.2
     space_after = Pt(8) if _is_rtl(lang) else Pt(6)
@@ -234,10 +245,9 @@ def format_body_paragraph(p, lang: str = "es") -> None:
 
 def format_heading_paragraph(p, level: int, lang: str = "es") -> None:
     """Apply heading formatting to a paragraph at the given level."""
-    if _is_rtl(lang):
-        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    else:
+    if not _is_rtl(lang):
         p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    # For RTL, bidi handles alignment
 
     if level == 1:
         p.paragraph_format.space_before = Pt(H1_SPACE_BEFORE_PT)
@@ -292,7 +302,7 @@ def ensure_spacing_after_list(doc: Document) -> None:
 
 def insert_header_image(doc: Document) -> None:
     """Insert header.png spanning the full page width (edge to edge)."""
-    if not HEADER_IMAGE.exists():
+    if not HEADER_IMAGE or not HEADER_IMAGE.exists():
         return
 
     section = doc.sections[0]
@@ -502,7 +512,7 @@ def insert_bullet_item(doc: Document, text: str, level: int = 0, lang: str = "es
         # Use Normal style for RTL to avoid LTR-hardcoded bullet behaviors
         p = doc.add_paragraph()
         _set_paragraph_rtl(p)
-        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        # bidi handles alignment naturally
         # Manual bullet character for RTL - using Arabic bullet '\u2022' or similar
         text = f"• {text}"
     else:
@@ -522,7 +532,7 @@ def insert_numbered_item(doc: Document, text: str, level: int = 0, lang: str = "
     """Insert a numbered list item at the given nesting level."""
     if _is_rtl(lang):
         p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        # bidi handles alignment naturally via _apply_rtl_if_needed below
     else:
         style = "List Number" if level == 0 else "List Number 2" if level == 1 else "List Number 3"
         p = doc.add_paragraph(style=style)
@@ -540,7 +550,8 @@ def insert_alphabetic_item(doc: Document, label: str, text: str, level: int = 0,
     """Insert an alphabetic list item (e.g., A) or b.) with manual labels."""
     # We use Normal style but apply list-like indentation
     p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    if not _is_rtl(lang):
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
     p.paragraph_format.line_spacing = 1.3 if _is_rtl(lang) else 1.2
     p.paragraph_format.space_before = Pt(LIST_ITEM_SPACE_BEFORE_PT)
     p.paragraph_format.space_after = Pt(LIST_ITEM_SPACE_AFTER_PT)
@@ -561,7 +572,9 @@ def insert_blockquote(doc: Document, text: str, lang: str = "es") -> None:
     """Insert a blockquote paragraph with left border and indent."""
     font_name = _resolve_font(lang)
     p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if _is_rtl(lang) else WD_ALIGN_PARAGRAPH.LEFT
+    if not _is_rtl(lang):
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    # For RTL, bidi from _apply_rtl_if_needed handles alignment
     p.paragraph_format.left_indent = Cm(1.5)
     p.paragraph_format.space_before = Pt(4)
     p.paragraph_format.space_after = Pt(4)

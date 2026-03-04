@@ -1,0 +1,11 @@
+{
+  "drive": {
+    "organize_by_language": false,
+    "sequential_naming": false,
+    "language_folder_names": {}
+  },
+  "document": {
+    "header_image": null,
+    "default_languages": ["EN", "FR", "AR", "ZH"]
+  }
+}
