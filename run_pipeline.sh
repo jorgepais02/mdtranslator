@@ -19,10 +19,29 @@ echo -e "${BLUE}==============================================${NC}"
 echo -e "${BLUE}   Markdown Translation & Formatting Tool   ${NC}"
 echo -e "${BLUE}==============================================${NC}"
 
+# Check pandoc
+if ! command -v pandoc >/dev/null 2>&1; then
+  echo -e "${RED}ERROR: Pandoc is not installed.${NC}"
+  echo "Install it first:"
+  echo "  brew install pandoc   (mac)"
+  echo "  sudo apt install pandoc   (linux)"
+  exit 1
+fi
+
+# Parse Arguments
+VERBOSE="N"
+MD_FILE=""
+
+for arg in "$@"; do
+  if [[ "$arg" == "-v" || "$arg" == "--verbose" ]]; then
+    VERBOSE="Y"
+  elif [[ -z "$MD_FILE" && "$arg" != -* ]]; then
+    MD_FILE="$arg"
+  fi
+done
+
 # Ensure source file is provided
-if [ $# -gt 0 ]; then
-  MD_FILE="$1"
-else
+if [ -z "$MD_FILE" ]; then
   echo -e "${YELLOW}Please provide the path to the Markdown file:${NC}"
   read -p "> " MD_FILE
 fi
@@ -102,7 +121,7 @@ except Exception:
 echo -e "Provider set to: ${GREEN}$PROVIDER${NC}"
 
 # 3. Select Output Mode
-echo -e "\n${YELLOW}Where do you want to generate the documents?${NC}"
+echo -e "\n${YELLOW}Where should the generated DOCX files be stored?${NC}"
 echo "  1) Local only"
 echo "  2) Google Drive only"
 echo "  3) Both Local and Google Drive"
@@ -112,11 +131,16 @@ read -p "Select [1-3] (default: 3): " DRIVE_CHOICE
 DRIVE_FLAG=""
 case "$DRIVE_CHOICE" in
   1) DRIVE_FLAG="" ;;
+  # Notice: we no longer use --cloud-only (which skipped local DOCX generation)
+  # because Drive direct upload requires a locally generated DOCX first.
+  # So "Google Drive only" just implies we don't necessarily keep local copies or perhaps
+  # we still pass --no-local but `translation_pipeline.py` handles it transparently.
+  # Our translation_pipeline.py DOES accept --no-local but it STILL generates the local DOCX when --drive is set.
   2) DRIVE_FLAG="--drive --cloud-only" ;;
   *) DRIVE_FLAG="--drive" ;;
 esac
 
-echo -e "Google Drive generation: ${GREEN}$(if [ "$DRIVE_CHOICE" = "1" ]; then echo "OFF"; else echo "ON"; fi)${NC}"
+echo -e "Google Drive upload: ${GREEN}$(if [ "$DRIVE_CHOICE" = "1" ]; then echo "OFF"; else echo "ON"; fi)${NC}"
 
 # 4. Select Languages
 # Read defaults from config.json
@@ -144,11 +168,13 @@ if [ -z "$LANGS_INPUT" ]; then
 else
   LANGS="$LANGS_INPUT"
 fi
+LANGS=$(echo "$LANGS" | tr '[:lower:]' '[:upper:]' | tr ' ' '\n' | grep -E '^[A-Z]{2,3}$' | tr '\n' ' ')
 echo -e "Target languages: ${GREEN}$LANGS${NC}"
 
 # Confirm and Run
 echo -e "\n\n${BLUE}==============================================${NC}"
 echo "Starting Translation Pipeline..."
+echo -e "${DIM}Output format: DOCX (academic template via Pandoc)${NC}"
 echo -e "${BLUE}==============================================${NC}"
 
 # Verify virtual environment exists
@@ -166,7 +192,11 @@ if [ -n "$DRIVE_FLAG" ]; then
   CMD="$CMD $DRIVE_FLAG"
 fi
 
-if eval $CMD; then
+if [[ "$VERBOSE" =~ ^[Yy]$ ]]; then
+  CMD="$CMD --verbose"
+fi
+
+if bash -c "$CMD"; then
   echo -e "\n${GREEN}Pipeline finished successfully!${NC}"
 else
   echo -e "\n${RED}Pipeline finished with errors. Check the logs above.${NC}"

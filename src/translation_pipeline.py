@@ -38,7 +38,7 @@ import requests
 from dotenv import load_dotenv
 
 from translators import get_translator, TranslationError
-from ai_refiner import refine_translation
+from ai_refiner import refine_markdown
 
 
 class Spinner:
@@ -182,11 +182,16 @@ def rebuild_markdown_from_translations(
 # ═══════════════════════════════════════════
 
 def generate_docx_document(md_file: Path, lang_code: str) -> Path:
-    """Generate a DOCX from a translated .md file using document_generator."""
-    from document_generator import convert_markdown_to_docx
+    """Generate a DOCX from a translated .md file using document_converter."""
+    from document_converter import convert
 
     docx_file = md_file.with_suffix(".docx")
-    convert_markdown_to_docx(md_file, docx_file, lang=lang_code)
+    
+    # We might need to pass header image from config if any
+    header_cfg = CONFIG.get("document", {}).get("header_image")
+    header_img = Path("public/header.png") if not header_cfg else (PROJECT_ROOT / header_cfg)
+    
+    convert(md_file, docx_file, lang=lang_code, header=header_img)
     print(f"        DOCX → {docx_file.name}")
     return docx_file
 
@@ -261,14 +266,17 @@ def process_source_file(md_path: Path, langs: list[str], translator, use_google:
         return
 
     # 1. Handle original Spanish file
-    if not no_local:
-        es_folder = TRANSLATED_DIR / "es"
-        es_folder.mkdir(parents=True, exist_ok=True)
-        es_file = es_folder / "es.md"
+    es_folder = TRANSLATED_DIR / "es"
+    es_folder.mkdir(parents=True, exist_ok=True)
+    es_file = es_folder / "es.md"
+    
+    if not no_local or (no_local and g_manager):
+        # We need to process locally to generate DOCX if we have to upload to Drive or if no_local=False
         shutil.copy2(md_path, es_file)
         print(f"  ▸ Processing: {md_path.name} (Original ES) → {es_file.relative_to(PROJECT_ROOT)}")
         docx_file = generate_docx_document(es_file, "es")
-        convert_docx_to_pdf(docx_file)
+        if not no_local:
+            convert_docx_to_pdf(docx_file)
     else:
         print(f"  ▸ Processing: {md_path.name} (Original ES)")
 
@@ -276,18 +284,22 @@ def process_source_file(md_path: Path, langs: list[str], translator, use_google:
         spinner = Spinner("      ☁️  Uploading to Google Drive...")
         spinner.start()
         try:
-            doc_id = g_manager.create_document(
-                title=md_path.stem, folder_id=folder_id, lang="es",
-                organize_by_language=CONFIG.get("drive", {}).get("organize_by_language", False),
+            target_folder = folder_id
+            if CONFIG.get("drive", {}).get("organize_by_language", False):
+                target_folder = g_manager.resolve_language_folder(
+                    folder_id, "es", CONFIG.get("drive", {}).get("language_folder_names")
+                )
+            
+            doc_name = g_manager.resolve_filename(
+                title=md_path.stem, 
+                folder_id=target_folder, 
+                lang="es",
                 sequential_naming=CONFIG.get("drive", {}).get("sequential_naming", False),
-                lang_folder_names=CONFIG.get("drive", {}).get("language_folder_names"),
                 sequential_naming_pattern=CONFIG.get("drive", {}).get("sequential_naming_pattern")
             )
-            # Setup layout: Header with image + Footer with page numbers
-            header_cfg = CONFIG.get("document", {}).get("header_image")
-            header_img = (PROJECT_ROOT / header_cfg) if header_cfg else None
-            g_manager.setup_document_layout(doc_id, header_image_path=header_img, is_rtl=False, lang="es")
-            g_manager.upload_markdown_content(doc_id, lines, "es")
+
+            # Upload DOCX
+            doc_id = g_manager.upload_docx(docx_file, target_folder, filename=doc_name)
             doc_url = g_manager.get_document_url(doc_id)
             if not hasattr(process_source_file, "generated_links"):
                 process_source_file.generated_links = {}
@@ -299,12 +311,13 @@ def process_source_file(md_path: Path, langs: list[str], translator, use_google:
             success = False
 
     # 2. Translate to each target language
-    for lang_code in langs:
+    total_langs = len(langs)
+    for idx, lang_code in enumerate(langs, 1):
         short = lang_code.lower().split("-")[0]
         lang_folder_names = CONFIG.get("drive", {}).get("language_folder_names", {})
         lang_display_name = lang_folder_names.get(short.lower(), short).upper()
         
-        spinner = Spinner(f"  ▸ Translating to {lang_display_name} ({short.upper()})…")
+        spinner = Spinner(f"  [{idx}/{total_langs}] Translating → {lang_display_name} ({short.upper()})…")
         spinner.start()
         try:
             translated = translator.translate(texts_to_translate, lang_code)
@@ -319,25 +332,26 @@ def process_source_file(md_path: Path, langs: list[str], translator, use_google:
         # AI Refinement for specific languages
         needs_refinement = short in ['ar', 'zh', 'ja', 'ko', 'fa', 'he', 'ur']
         if needs_refinement:
-            spinner = Spinner(f"  ▸ Refining {lang_display_name} translation with Gemini…")
+            spinner = Spinner(f"  [{idx}/{total_langs}] Refining {lang_display_name} translation with Gemini…")
             spinner.start()
             try:
-                rebuilt = refine_translation(rebuilt, lang_code)
+                rebuilt = refine_markdown(rebuilt, lang_code)
                 spinner.stop("✓")
             except Exception as e:
                 spinner.stop("❌")
                 print(f"      Refinement Error: {e} (Using unrefined text)")
 
         # Local output
-        if not no_local:
-            try:
-                lang_folder = TRANSLATED_DIR / short
-                lang_folder.mkdir(parents=True, exist_ok=True)
-                out_file = lang_folder / f"{short}.md"
-                out_file.write_text("\n".join(rebuilt) + "\n", encoding="utf-8")
+        lang_folder = TRANSLATED_DIR / short
+        lang_folder.mkdir(parents=True, exist_ok=True)
+        out_file = lang_folder / f"{short}.md"
+        out_file.write_text("\n".join(rebuilt) + "\n", encoding="utf-8")
                 
+        if not no_local or (no_local and g_manager):
+            try:
                 docx_file = generate_docx_document(out_file, short)
-                convert_docx_to_pdf(docx_file)
+                if not no_local:
+                    convert_docx_to_pdf(docx_file)
             except Exception as e:
                 print(f"      Local Export Error ({short}): {e}")
                 success = False
@@ -347,19 +361,22 @@ def process_source_file(md_path: Path, langs: list[str], translator, use_google:
             spinner = Spinner("      ☁️  Uploading to Google Drive...")
             spinner.start()
             try:
-                doc_id = g_manager.create_document(
-                    title=md_path.stem, folder_id=folder_id, lang=short,
-                    organize_by_language=CONFIG.get("drive", {}).get("organize_by_language", False),
+                target_folder = folder_id
+                if CONFIG.get("drive", {}).get("organize_by_language", False):
+                    target_folder = g_manager.resolve_language_folder(
+                        folder_id, short, CONFIG.get("drive", {}).get("language_folder_names")
+                    )
+                
+                doc_name = g_manager.resolve_filename(
+                    title=md_path.stem, 
+                    folder_id=target_folder, 
+                    lang=short,
                     sequential_naming=CONFIG.get("drive", {}).get("sequential_naming", False),
-                    lang_folder_names=CONFIG.get("drive", {}).get("language_folder_names"),
                     sequential_naming_pattern=CONFIG.get("drive", {}).get("sequential_naming_pattern")
                 )
-                # Setup layout: Header with image + Footer with page numbers
-                header_cfg = CONFIG.get("document", {}).get("header_image")
-                header_img = (PROJECT_ROOT / header_cfg) if header_cfg else None
-                is_rtl = short in ["ar", "he", "fa", "ur"]
-                g_manager.setup_document_layout(doc_id, header_image_path=header_img, is_rtl=is_rtl, lang=short)
-                g_manager.upload_markdown_content(doc_id, rebuilt, short)
+
+                # Upload DOCX
+                doc_id = g_manager.upload_docx(docx_file, target_folder, filename=doc_name)
                 doc_url = g_manager.get_document_url(doc_id)
                 if not hasattr(process_source_file, "generated_links"):
                     process_source_file.generated_links = {}
@@ -369,6 +386,17 @@ def process_source_file(md_path: Path, langs: list[str], translator, use_google:
                 spinner.stop("❌")
                 print(f"      Error: {e}")
                 success = False
+        
+        # Cleanup local files if --cloud-only / no_local is True
+        if no_local and lang_folder.exists():
+            shutil.rmtree(lang_folder)
+            
+    # Cleanup for ES original if no_local
+    if no_local:
+        es_folder = TRANSLATED_DIR / "es"
+        if es_folder.exists():
+            shutil.rmtree(es_folder)
+
     return success
 
 
@@ -411,7 +439,13 @@ def main() -> None:
         "-c", "--cloud-only", "--no-local",
         action="store_true",
         dest="no_local",
-        help="Skip local DOCX/PDF generation (use with --drive)",
+        help="Skip local DOCX/PDF retention. Deletes generated temporary files (use with --drive)",
+    )
+    ap.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        dest="verbose",
+        help="Enable verbose mode for debugging output.",
     )
     ap.add_argument(
         "-o", "--output",

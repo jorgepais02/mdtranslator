@@ -1,47 +1,37 @@
 # La Amenaza Cuántica
 
-La criptografía es la capa invisible que sustenta la seguridad en internet, permitiendo transacciones y comunicaciones privadas mediante barreras matemáticas.
+Cryptography forms the invisible layer that underpins all internet activities, from banking to sending messages and making purchases. It is the fundamental reason for secure transactions and the ability to transmit private information without unauthorized access. The padlock icon in a browser signifies that mathematical principles are at work, creating a secure barrier.
 
-## Protección de la Información
+## Current Cryptographic Protection
 
-La información se protege mediante dos familias principales de criptografía:
+Information security today relies on two primary families of cryptography:
 
-*   **Criptografía simétrica:** Utiliza una única clave compartida por ambas partes, similar a una caja fuerte con una sola llave.
-*   **Criptografía de clave pública (asimétrica):** Cada persona posee dos claves: una pública (compartida) y una privada (secreta). Esto permite establecer comunicaciones seguras entre partes que no se conocen previamente.
+- Symmetrical Cryptography: This method uses a single, shared key, much like a strongbox that requires the same key for both locking and unlocking. Both communicating parties must possess this identical key.
+- Public-Key (Asymmetrical) Cryptography: In this system, each individual possesses two distinct keys:
+    - A public key, which can be freely shared with anyone, acting like a mailbox where anyone can deposit a letter.
+    - A private key, which is kept secret by the owner and is used to open the mailbox and access its contents.
+This dual-key system enables two parties who have no prior relationship to establish a secure communication channel, forming the bedrock of trust on the internet.
 
-## Fundamentos Matemáticos de la Criptografía de Clave Pública
+## Mathematical Foundations of Public-Key Cryptography
 
-La seguridad de la criptografía de clave pública se basa en problemas matemáticos que son computacionalmente fáciles en una dirección, pero extremadamente difíciles de revertir para los ordenadores clásicos. Ejemplos incluyen:
+The security of public-key cryptography is not based on the secrecy of the public key itself, but rather on mathematical problems that are computationally easy to perform in one direction but extremely difficult to reverse.
 
-*   **Multiplicación y factorización:** Multiplicar números grandes es sencillo, pero factorizar el resultado para obtener los números originales es casi imposible. Este principio es la base del algoritmo RSA.
-*   **Logaritmo discreto:** Se apoya en la aritmética modular y es fundamental en protocolos como Diffie-Hellman.
-*   **Curvas elípticas:** Permiten operaciones de inversión rápidas, ofreciendo alta seguridad con claves de menor tamaño y siendo ampliamente utilizadas en la actualidad.
+Key examples of these problems include:
 
-## La Computación Cuántica
+- Multiplication and Factorization: Multiplying two large prime numbers is computationally straightforward. However, deriving the original prime factors from their product is an exceedingly difficult task. This principle forms the basis of the RSA algorithm.
+- Discrete Logarithm: This problem involves operations within modular arithmetic and is the foundation for protocols such as Diffie-Hellman.
+- Elliptic Curves: Cryptography based on elliptic curves utilizes operations that are quick to compute but difficult to invert. This method is widely adopted today due to its ability to provide strong security with relatively small key sizes.
 
-La dificultad de estos problemas matemáticos es relativa al tipo de ordenador utilizado.
+## The Quantum Threat
 
-### Diferencia entre Ordenadores Clásicos y Cuánticos
+The inherent difficulty of these mathematical problems is not an absolute law of nature but is relative to the type of computing device used. Classical computers process information using bits, which can represent either a 0 or a 1. In contrast, quantum computers operate with qubits, which can represent combinations of states simultaneously and leverage quantum mechanical properties like superposition and interference to amplify correct solutions. This represents not merely a faster computation, but a fundamentally different computational model that alters the landscape for certain classes of problems.
 
-*   **Ordenadores clásicos:** Operan con bits (0 o 1).
-*   **Ordenadores cuánticos:** Utilizan cúbits, que pueden representar combinaciones de estados simultáneamente y aprovechan propiedades físicas como la interferencia para amplificar las respuestas correctas. No son simplemente más rápidos, sino que emplean un modelo de cálculo distinto que altera la complejidad de ciertas categorías de problemas.
+In the 1990s, Peter Shor theoretically demonstrated that a sufficiently powerful quantum computer could efficiently solve these foundational cryptographic problems using Shor's algorithm. This revelation implies that the assumption of these problems being intractable is contingent upon the use of classical computation; a shift in the computational model directly changes their difficulty. Therefore, quantum computing is not simply a "better attacker"; it represents a distinct category of computational capability that fundamentally invalidates the current underpinnings of internet trust.
 
-### El Algoritmo de Shor
+## Long-Term Implications of a Future Threat
 
-En la década de 1990, se demostró teóricamente que un ordenador cuántico suficientemente potente podría resolver los problemas matemáticos que sustentan la criptografía de clave pública de manera eficiente mediante el algoritmo de Shor. Esto implica que la suposición de la imposibilidad de resolver estos problemas depende del uso de la computación clásica; un cambio en el modelo de computación modifica su dificultad.
+A critical insight is that the full realization of quantum computing capabilities does not need to occur immediately for it to have significant consequences today. Encrypted information, once intercepted, does not simply vanish; it can be stored indefinitely. There is a tangible dynamic where organizations or governments may be collecting and archiving encrypted data now, with the intent to decrypt it in 10 or 20 years when advanced quantum computing capabilities become available. This scenario is particularly relevant for data with long-term value, such as medical records or financial information. The risk commences at the point of data capture, making the quantum threat not instantaneous, but cumulative over time.
 
-La computación cuántica no representa un "atacante mejor", sino una categoría de capacidad computacional diferente que invalida los fundamentos actuales del sistema de confianza en internet.
+## Conclusion
 
-## Consecuencias de la Amenaza Cuántica
-
-La amenaza cuántica no requiere que la capacidad de computación cuántica esté disponible de inmediato para tener implicaciones actuales.
-
-### El Riesgo de "Almacenar Ahora, Descifrar Después"
-
-La información cifrada interceptada hoy puede ser almacenada por organizaciones o gobiernos con la intención de descifrarla en el futuro (10 o 20 años) cuando la computación cuántica sea una realidad. Este riesgo es particularmente relevante para datos con una vida útil prolongada, como información médica o financiera.
-
-El riesgo comienza en el momento en que el dato es capturado, haciendo que la amenaza cuántica sea acumulativa y no instantánea.
-
-### Vida Útil del Dato vs. Vida Útil del Algoritmo
-
-Aunque existe incertidumbre sobre las fechas exactas para el desarrollo de ordenadores cuánticos capaces de romper la criptografía actual, el riesgo persiste. La seguridad de un dato se define por el tiempo que necesita ser protegido. Si la vida útil de un dato es mayor que la vida útil del algoritmo que lo protege, existe un problema de seguridad. La amenaza cuántica representa un cambio de paradigma que sugiere que lo que hoy es inaccesible podría volverse información abierta si el modelo de computación evoluciona.
+While there is considerable uncertainty regarding the exact timeline for the development of practical quantum computers—with estimates often extending to 30 years—this uncertainty does not negate the inherent risk. The assessment of security is determined by the duration for which a piece of data needs protection. A significant problem arises if the useful lifespan of the data exceeds the effective lifespan of the cryptographic algorithm protecting it. The quantum threat represents a fundamental shift in the security horizon, serving as a potent reminder that information currently deemed inaccessible could become openly exposed if the underlying model of computation undergoes a transformative change.
