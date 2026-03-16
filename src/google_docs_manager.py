@@ -105,14 +105,15 @@ class GoogleDocsManager:
         
     def get_next_sequential_name(self, folder_id: str) -> str:
         """Count the number of files in a folder and return the next sequential number as a string."""
-        query = f"'{folder_id}' in parents and mimeType='application/vnd.google-apps.document' and trashed=false"
+        # Count all files in the folder (not just google docs) in case conversion failed or they uploaded as DOCX
+        query = f"'{folder_id}' in parents and mimeType != 'application/vnd.google-apps.folder' and trashed=false"
         # Using pagination to get accurate count if there are many files
         count = 0
         page_token = None
         while True:
             results = self.drive_service.files().list(
                 q=query, 
-                fields='nextPageToken, files(id)', 
+                fields='nextPageToken, files(id, mimeType)', 
                 corpora='allDrives',
                 includeItemsFromAllDrives=True,
                 supportsAllDrives=True,
@@ -148,21 +149,21 @@ class GoogleDocsManager:
         return next_num
 
     def upload_docx(self, docx_path: Path, folder_id: str | None = None, filename: str | None = None) -> str:
-        """Upload a local DOCX file to Google Drive directly, converting it to a Google Doc."""
+        """Upload a local DOCX file to Google Drive directly, converting it to a Google Doc.
+        Includes exponential backoff for intermittent 500 server errors.
+        """
+        import time
+        from googleapiclient.errors import HttpError
+        
         if not filename:
             filename = docx_path.name
             
         file_metadata = {
-            'name': filename
+            'name': filename,
+            'mimeType': 'application/vnd.google-apps.document'
         }
         if folder_id:
             file_metadata['parents'] = [folder_id]
-            
-        # application/vnd.google-apps.document as mimetype in MediaFileUpload or in create? 
-        # Using media mimetype as docx and telling Drive to convert it by not specifying mimeType in metadata 
-        # but the user said Drive does it automatically if opened, but we want it as a Google Doc type.
-        # Actually, simply setting mimeType in metadata to 'application/vnd.google-apps.document' forces conversion
-        file_metadata['mimeType'] = 'application/vnd.google-apps.document'
 
         # Correct MIME type for DOCX uploading
         media = MediaFileUpload(
@@ -171,14 +172,26 @@ class GoogleDocsManager:
             resumable=True
         )
 
-        file = self.drive_service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id',
-            supportsAllDrives=True
-        ).execute()
+        max_retries = 4
+        base_delay = 2
 
-        return file.get('id')
+        for attempt in range(max_retries):
+            try:
+                file = self.drive_service.files().create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields='id',
+                    supportsAllDrives=True
+                ).execute()
+                return file.get('id')
+            except HttpError as e:
+                # If it's a 500-level error and we haven't exhausted our retries
+                if e.resp.status >= 500 and attempt < max_retries - 1:
+                    sleep_time = base_delay * (2 ** attempt)
+                    print(f"      [yellow]⚠ Drive API Error ({e.resp.status}). Retrying in {sleep_time}s...[/yellow]")
+                    time.sleep(sleep_time)
+                else:
+                    raise
 
     def get_document_url(self, doc_id: str) -> str:
         return f"https://docs.google.com/document/d/{doc_id}/edit"

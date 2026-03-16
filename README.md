@@ -5,10 +5,10 @@ Pipeline automático para **traducir apuntes en Markdown** a múltiples idiomas 
 ## Características
 
 - **Traducción automática** multi-idioma con **Fallbacks Dinámicos**: Si una API falla (ej. Cuota de DeepL), salta automáticamente a la siguiente (Azure AI Translator) sin interrumpir el proceso.
-- **Generación en Google Docs** directamente a tu Google Drive, con formato nativo, listas reales, y RTL/BiDi perfecto (Alineación a la derecha real).
-- **Generación de DOCX local** con formato académico (Times New Roman, márgenes, numeración, RTL nativo).
+- **Generación en Google Drive Directa**: Sube automáticamente el documento `DOCX` compilado con plantilla predefinida y lo almacena como Doc nativo sin corromper estilos.
+- **Generación de DOCX local** con formato académico avanzado usando **Pandoc**. Incluye alineación RTL real (Bidi interactivo), inyección de estilos, portadas personalizadas y **numeración de página localizada** (Numeros árabes orientales, Hanzi chino/coreano/japonés según corresponda).
 - **Generación de PDF local** vía LibreOffice (sin APIs externas).
-- **CLI Interactivo** súper fácil de usar para seleccionar origen, proveedor, formato de salida e idiomas.
+- **CLI Interactivo y Seguro** súper fácil de usar. Chequea dependencias, permite auto-limpieza temporal (modo Cloud-Only) e integración con Gemini para embellecer raw text antes de traducir.
 - **Configuración Abstraída**: Comportamiento personalizable (organización en carpetas, nombres secuenciales, idiomas por defecto) mediante `config.json`.
 
 ## Estructura
@@ -17,9 +17,11 @@ Pipeline automático para **traducir apuntes en Markdown** a múltiples idiomas 
 ├── src/
 │   ├── translation_pipeline.py   # Orquestador: traduce y envía a generadores
 │   ├── translators.py            # Interfaces de DeepL y Azure Translator
-│   ├── document_generator.py     # Generador de DOCX local
-│   ├── google_docs_manager.py    # Integración con Google Drive/Docs API
-│   └── pdf_converter.py          # Script de LibreOffice
+│   ├── document_converter.py     # Generador de DOCX local usando Pandoc
+│   ├── postprocess_docx.py       # Manipula el XML del DOCX para RTL, números locales y Header/Footer
+│   ├── ai_refiner.py             # Limpia modismos usando modelo Gemini (útil para Arabe/Chino)
+│   ├── google_docs_manager.py    # Subida rápida a Drive sin procesamiento HTTP excesivo
+│   └── templates/                # Plantillas DOCX de referencia para Pandoc
 ├── sources/                      # Archivos .md de entrada
 ├── public/
 │   └── header.png                # Imagen opcional de cabecera
@@ -56,7 +58,7 @@ nano .env
 
 ## Configuración de Google Docs (Opcional)
 
-Si quieres que el sistema genere documentos con formato perfecto (especialmente útil para la alineación RTL del Árabe) directamente en tu Google Drive:
+Si quieres que el sistema suba automáticamente el documento generado directamente a tu Google Drive, organizado por idioma:
 
 1. Ve a [Google Cloud Console](https://console.cloud.google.com/).
 2. Habilita "Google Docs API" y "Google Drive API".
@@ -98,8 +100,8 @@ source .venv/bin/activate
 # Modo local + DeepL (por defecto)
 python src/translation_pipeline.py sources/apuntes.md
 
-# Generar solo en Google Drive usando Azure
-python src/translation_pipeline.py sources/apuntes.md --provider azure --google --no-local
+# Generar solo en Google Drive usando Azure (borrando el rastro local con --cloud-only)
+python src/translation_pipeline.py sources/apuntes.md --provider azure --drive --cloud-only
 
 # Traducir solo a ciertos idiomas
 python src/translation_pipeline.py sources/apuntes.md --langs EN-GB FR AR

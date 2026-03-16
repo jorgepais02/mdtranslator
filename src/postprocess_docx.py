@@ -189,23 +189,71 @@ def inject_header(tmp: Path, img: Path):
 
 
 # ── 6. Page numbers in footer ─────────────────────────────────────────────────
-def inject_page_numbers(tmp: Path, rtl=False):
+def inject_page_numbers(tmp: Path, lang: str, rtl=False):
+    # Algunos lectores (incluido Google Docs y LibreOffice macOS) ignoran el formato localizado de OOXML
+    # Por decisión del usuario, simplemente omitimos la paginación para evitar el 1,2,3... occidental.
+    if lang in {"ar", "fa", "ur", "he", "zh", "ja", "ko"}:
+        _remove_footer(tmp)
+        return
+
     jc_val = "right" if rtl else "center"
+    
+    # Formato de instrucción Word y códigos de idioma
+    numFmt = ""
+    w_lang = ""
+    if lang == "ar": 
+        numFmt = "ArabicIndic"
+        w_lang = '<w:lang w:val="ar-SA" w:bidi="ar-SA"/>'
+    elif lang in ["fa", "ur"]: 
+        numFmt = "ArabicIndic"
+        w_lang = '<w:lang w:val="fa-IR" w:bidi="fa-IR"/>'
+    elif lang == "zh": 
+        numFmt = "CHINESECOUNTING"
+        w_lang = '<w:lang w:val="zh-CN" w:eastAsia="zh-CN"/>'
+    elif lang == "ja": 
+        numFmt = "Aiueo"
+        w_lang = '<w:lang w:val="ja-JP" w:eastAsia="ja-JP"/>'
+    elif lang == "he": 
+        numFmt = "hebrew2"
+        w_lang = '<w:lang w:val="he-IL" w:bidi="he-IL"/>'
+
+    fmt_str = f" \\* {numFmt} " if numFmt else " "
+    
+    pPr_extra = '<w:bidi w:val="1"/>' if rtl else ''
+    rPr_extra = (w_lang if w_lang else '') + ('<w:rtl w:val="1"/>' if rtl else '')
 
     (tmp / "word" / "footer1.xml").write_text(f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:ftr xmlns:w="{W}">
   <w:p>
-    <w:pPr><w:jc w:val="{jc_val}"/></w:pPr>
-    <w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t xml:space="preserve"> </w:t></w:r>
-    <w:fldSimple w:instr=" PAGE ">
-      <w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>1</w:t></w:r>
-    </w:fldSimple>
-    <w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t xml:space="preserve"> / </w:t></w:r>
-    <w:fldSimple w:instr=" NUMPAGES ">
-      <w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>1</w:t></w:r>
-    </w:fldSimple>
+    <w:pPr><w:jc w:val="{jc_val}"/>{pPr_extra}</w:pPr>
+    
+    <w:r><w:rPr><w:sz w:val="18"/>{rPr_extra}</w:rPr><w:fldChar w:fldCharType="begin"/></w:r>
+    <w:r><w:rPr><w:sz w:val="18"/>{rPr_extra}</w:rPr><w:instrText xml:space="preserve"> PAGE{fmt_str}</w:instrText></w:r>
+    <w:r><w:rPr><w:sz w:val="18"/>{rPr_extra}</w:rPr><w:fldChar w:fldCharType="separate"/></w:r>
+    <w:r><w:rPr><w:sz w:val="18"/>{rPr_extra}</w:rPr><w:t>1</w:t></w:r>
+    <w:r><w:rPr><w:sz w:val="18"/>{rPr_extra}</w:rPr><w:fldChar w:fldCharType="end"/></w:r>
+    
+    <w:r><w:rPr><w:sz w:val="18"/>{rPr_extra}</w:rPr><w:t xml:space="preserve"> / </w:t></w:r>
+    
+    <w:r><w:rPr><w:sz w:val="18"/>{rPr_extra}</w:rPr><w:fldChar w:fldCharType="begin"/></w:r>
+    <w:r><w:rPr><w:sz w:val="18"/>{rPr_extra}</w:rPr><w:instrText xml:space="preserve"> NUMPAGES{fmt_str}</w:instrText></w:r>
+    <w:r><w:rPr><w:sz w:val="18"/>{rPr_extra}</w:rPr><w:fldChar w:fldCharType="separate"/></w:r>
+    <w:r><w:rPr><w:sz w:val="18"/>{rPr_extra}</w:rPr><w:t>1</w:t></w:r>
+    <w:r><w:rPr><w:sz w:val="18"/>{rPr_extra}</w:rPr><w:fldChar w:fldCharType="end"/></w:r>
+    
   </w:p>
 </w:ftr>""", encoding="utf-8")
+
+    rels_dir = tmp / "word" / "_rels"
+    rels_dir.mkdir(exist_ok=True)
+    ftr_rels = rels_dir / "footer1.xml.rels"
+    ftr_rels.write_text(f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="{RELS_NS}"/>""", encoding="utf-8")
+
+    _add_part(tmp, "/word/footer1.xml",
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml")
+    _add_rel(tmp, "rFtr1", f"{R}/footer", "footer1.xml")
+    _link_footer_in_sectPr(tmp, "rFtr1")
 
     rels_dir = tmp / "word" / "_rels"
     rels_dir.mkdir(exist_ok=True)
@@ -261,7 +309,11 @@ def _link_header_in_sectPr(tmp, rel_id):
     for hr in sectPr.findall(w("headerReference")): sectPr.remove(hr)
     hr = etree.SubElement(sectPr, w("headerReference"))
     hr.set(w("type"), "default"); hr.set(r("id"), rel_id)
-    if sectPr.find(w("titlePg")) is None: etree.SubElement(sectPr, w("titlePg"))
+    
+    # Pandoc sets titlePg by default, which hides header/footer on page 1. Remove it.
+    titlePg = sectPr.find(w("titlePg"))
+    if titlePg is not None: sectPr.remove(titlePg)
+        
     etree.ElementTree(doc).write(str(tmp / "word" / "document.xml"),
                                  xml_declaration=True, encoding="UTF-8", standalone=True)
 
@@ -273,9 +325,23 @@ def _link_footer_in_sectPr(tmp, rel_id):
     for fr in sectPr.findall(w("footerReference")): sectPr.remove(fr)
     fr = etree.SubElement(sectPr, w("footerReference"))
     fr.set(w("type"), "default"); fr.set(r("id"), rel_id)
-    if sectPr.find(w("titlePg")) is None: etree.SubElement(sectPr, w("titlePg"))
+    
+    # Pandoc sets titlePg by default, which hides header/footer on page 1. Remove it.
+    titlePg = sectPr.find(w("titlePg"))
+    if titlePg is not None: sectPr.remove(titlePg)
+        
     etree.ElementTree(doc).write(str(tmp / "word" / "document.xml"),
                                  xml_declaration=True, encoding="UTF-8", standalone=True)
+
+def _remove_footer(tmp):
+    doc_path = tmp / "word" / "document.xml"
+    if not doc_path.exists(): return
+    doc = etree.parse(str(doc_path)).getroot()
+    sectPr = doc.find(f".//{w('sectPr')}")
+    if sectPr is not None:
+        for fr in sectPr.findall(w("footerReference")):
+            sectPr.remove(fr)
+        etree.ElementTree(doc).write(str(doc_path), xml_declaration=True, encoding="UTF-8", standalone=True)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -305,7 +371,7 @@ def postprocess(docx_path: Path, lang: str = "", header: Path = None):
 
         doc.write(str(doc_xml), xml_declaration=True, encoding="UTF-8", standalone=True)
 
-        inject_page_numbers(tmp, rtl=rtl)
+        inject_page_numbers(tmp, lang=lang, rtl=rtl)
 
         if header and header.exists():
             _add_png_type(tmp)
@@ -316,7 +382,6 @@ def postprocess(docx_path: Path, lang: str = "", header: Path = None):
             for f in tmp.rglob("*"):
                 if f.is_file(): z.write(f, f.relative_to(tmp))
         shutil.move(str(out), str(docx_path))
-        print(f"✓ {docx_path.name}  lang={lang or 'ltr'}  rtl={rtl}  cjk={cjk}")
     finally:
         shutil.rmtree(tmp)
 

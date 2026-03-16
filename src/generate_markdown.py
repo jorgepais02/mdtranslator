@@ -20,14 +20,15 @@ Rules:
 - Use # for title, ## for sections, ### for subsections
 - Prefer paragraphs over lists — use lists only when content is genuinely enumerable
 - Lists use only "- " (never asterisks)
+- Crucial: You MUST leave an empty blank line before and after ANY list
 - Ordered steps use "1. 2. 3."
 - Never fake headings with **bold** inside lists
 - Each heading must be followed by at least one paragraph before any list
 - Remove greetings, author names, URLs, chapter numbers from titles
+- If the original title contains part indicators like (I), (II), (III) or similar, you MUST preserve them in the final title, including the parentheses.
 - No decorative separators (---)
 - Technical, neutral, academic tone
 - Return ONLY the Markdown content"""
-
 # Elementos que no deberían aparecer en el output
 INVALID_RE = re.compile(r'(<[a-z]+[\s>]|\$\$|^\* )', re.MULTILINE)
 

@@ -6,3 +6,5 @@ google-auth-httplib2
 google-auth-oauthlib
 google-auth
 google-genai
+rich>=-13.0.0
+questionary>=2.0.0
