@@ -127,7 +127,8 @@ def run_pipeline(config: dict) -> list[dict]:
     no_local   = output_cfg == "Google Drive"
 
     translator = get_translator(provider)
-    # GoogleDocsManager uses httplib2 which is not thread-safe — instantiate per thread
+    # Authenticate once; each thread builds its own service objects from shared creds
+    shared_creds = GoogleDocsManager(console=console).creds if use_google else None
     all_results = []
 
     for f_path in files:
@@ -139,7 +140,8 @@ def run_pipeline(config: dict) -> list[dict]:
 
             t0 = time.monotonic()
             try:
-                lines  = f_path.read_text(encoding="utf-8").splitlines()
+                src_content = f_path.read_text(encoding="utf-8")
+                lines  = src_content.splitlines()
                 parsed = parse_markdown_lines(lines)
                 texts  = [text for _, _pfx, text in parsed if text]
             except Exception as e:
@@ -157,7 +159,6 @@ def run_pipeline(config: dict) -> list[dict]:
                 es_folder.mkdir(parents=True, exist_ok=True)
                 es_stem = _local_stem(f_path.stem, "es")
                 es_file = es_folder / f"{es_stem}.md"
-                src_content = f_path.read_text(encoding="utf-8")
                 if not es_file.exists() or es_file.read_text(encoding="utf-8") != src_content:
                     es_file.write_text(src_content, encoding="utf-8")
                 es_ok      = True
@@ -204,7 +205,7 @@ def run_pipeline(config: dict) -> list[dict]:
             def _process_lang(lang: str) -> dict:
                 nonlocal completed
                 short     = lang.lower().split("-")[0]
-                g_manager = GoogleDocsManager(console=console) if use_google else None
+                g_manager = GoogleDocsManager(console=console, creds=shared_creds) if use_google else None
 
                 view.set_lang_status(lang, "translating…")
                 live.update(view.render())

@@ -32,11 +32,11 @@ LANG_NAMES = {
 class GoogleDocsManager:
     """Manages Google Docs creation, text insertion, and Drive uploads."""
 
-    def __init__(self, credentials_path: str = 'secrets/credentials.json', token_path: str = 'secrets/token.json', console: Console | None = None):
+    def __init__(self, credentials_path: str = 'secrets/credentials.json', token_path: str = 'secrets/token.json', console: Console | None = None, creds=None):
         self.credentials_path = credentials_path
         self.token_path = token_path
         self._console = console or Console()
-        self.creds = self._authenticate()
+        self.creds = creds or self._authenticate()
         self.docs_service = build('docs', 'v1', credentials=self.creds)
         self.drive_service = build('drive', 'v3', credentials=self.creds)
 

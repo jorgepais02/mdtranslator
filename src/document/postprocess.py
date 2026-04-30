@@ -56,6 +56,55 @@ def set_el(parent, tag, attrs):
     return el
 
 
+INLINE_SPACING = {
+    "Title":          {"before": "0",   "after": "360", "line": "360", "lineRule": "auto"},
+    "Heading1":       {"before": "320", "after": "120", "line": "360", "lineRule": "auto"},
+    "Heading2":       {"before": "260", "after": "120", "line": "360", "lineRule": "auto"},
+    "Heading3":       {"before": "200", "after": "100", "line": "360", "lineRule": "auto"},
+    "Heading4":       {"before": "160", "after": "80",  "line": "360", "lineRule": "auto"},
+    "FirstParagraph": {"before": "0",   "after": "160", "line": "360", "lineRule": "auto"},
+    "BodyText":       {"before": "0",   "after": "160", "line": "360", "lineRule": "auto"},
+    "Compact":        {"before": "0",   "after": "80",  "line": "360", "lineRule": "auto"},
+    "SourceCode":     {"before": "160", "after": "160", "line": "240", "lineRule": "auto"},
+}
+_LIST_TAIL_AFTER = "220"
+
+def fix_inline_spacing(body):
+    """Apply spacing inline on every paragraph — survives Google Drive and LibreOffice round-trips."""
+    paras = body.findall(w("p"))
+    for i, p in enumerate(paras):
+        pPr = p.find(w("pPr"))
+        if pPr is None:
+            pPr = etree.SubElement(p, w("pPr"))
+            p.insert(0, pPr)
+
+        ps = pPr.find(w("pStyle"))
+        style_id = ps.get(w("val"), "") if ps is not None else ""
+
+        target = INLINE_SPACING.get(style_id)
+        if target is None:
+            continue
+
+        spacing = pPr.find(w("spacing"))
+        if spacing is None:
+            spacing = etree.SubElement(pPr, w("spacing"))
+        for attr, val in target.items():
+            spacing.set(w(attr), val)
+
+        # last item of a list block gets extra breathing room
+        if style_id == "Compact":
+            next_p  = paras[i + 1] if i + 1 < len(paras) else None
+            next_pPr = next_p.find(w("pPr")) if next_p is not None else None
+            next_ps  = next_pPr.find(w("pStyle")) if next_pPr is not None else None
+            next_style = next_ps.get(w("val"), "") if next_ps is not None else ""
+            if next_style != "Compact":
+                spacing.set(w("after"), _LIST_TAIL_AFTER)
+
+
+_CELL_SPACING = {"before": "60", "after": "60", "line": "276", "lineRule": "auto"}
+_HEADER_FILL  = "E2E2E2"
+_BORDER_COLOR = "BFBFBF"
+
 def fix_tables(body, rtl=False):
     jc_val = "right" if rtl else "left"
     for tbl in body.findall(f".//{w('tbl')}"):
@@ -63,12 +112,59 @@ def fix_tables(body, rtl=False):
         if tblPr is None:
             tblPr = etree.SubElement(tbl, w("tblPr"))
             tbl.insert(0, tblPr)
+
         set_el(tblPr, "tblW",   {w("w"): "5000", w("type"): "pct"})
         set_el(tblPr, "jc",     {w("val"): jc_val})
         set_el(tblPr, "tblInd", {w("w"): "0", w("type"): "dxa"})
         if rtl:
             set_el(tblPr, "bidiVisual", {w("val"): "1"})
+
+        # clean thin borders
+        borders = set_el(tblPr, "tblBorders", {})
+        for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+            set_el(borders, side, {w("val"): "single", w("sz"): "4",
+                                   w("space"): "0", w("color"): _BORDER_COLOR})
+
+        # cell padding
+        mar = set_el(tblPr, "tblCellMar", {})
+        for side, val in (("top", "80"), ("left", "120"), ("bottom", "80"), ("right", "120")):
+            set_el(mar, side, {w("w"): val, w("type"): "dxa"})
+
         reorder(tblPr, TBLPR_ORDER)
+
+        # insert a spacer paragraph after the table — Google ignores before on post-table paragraphs
+        spacer = etree.Element(w("p"))
+        sp = etree.SubElement(etree.SubElement(spacer, w("pPr")), w("spacing"))
+        sp.set(w("before"), "0")
+        sp.set(w("after"), "200")
+        tbl.addnext(spacer)
+
+        # per-row: header shading + cell paragraph spacing
+        rows = tbl.findall(w("tr"))
+        for i, tr in enumerate(rows):
+            is_last_row = (i == len(rows) - 1)
+            for tc in tr.findall(w("tc")):
+                tcPr = tc.find(w("tcPr"))
+                if tcPr is None:
+                    tcPr = etree.SubElement(tc, w("tcPr"))
+                    tc.insert(0, tcPr)
+                if i == 0:
+                    set_el(tcPr, "shd", {w("val"): "clear",
+                                         w("color"): "auto", w("fill"): _HEADER_FILL})
+                cell_paras = tc.findall(w("p"))
+                for j, p in enumerate(cell_paras):
+                    pPr = p.find(w("pPr"))
+                    if pPr is None:
+                        pPr = etree.SubElement(p, w("pPr"))
+                        p.insert(0, pPr)
+                    sp = pPr.find(w("spacing"))
+                    if sp is None:
+                        sp = etree.SubElement(pPr, w("spacing"))
+                    for attr, val in _CELL_SPACING.items():
+                        sp.set(w(attr), val)
+                    # last paragraph of last row gets extra after to separate from next block
+                    if is_last_row and j == len(cell_paras) - 1:
+                        sp.set(w("after"), "200")
 
 
 def fix_blocktext_spacing(body):
@@ -311,6 +407,7 @@ def postprocess(docx_path: Path, lang: str = "", header: Path = None):
 
         fix_tables(body, rtl=rtl)
         fix_blocktext_spacing(body)
+        fix_inline_spacing(body)
         if rtl:
             fix_rtl(body)
         if cjk:

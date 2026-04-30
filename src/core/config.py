@@ -1,7 +1,6 @@
 """Project-wide configuration and path constants."""
 
 import json
-import os
 from pathlib import Path
 
 PROJECT_ROOT    = Path(__file__).resolve().parent.parent.parent
@@ -20,10 +19,6 @@ def load_config() -> dict:
 
 CONFIG = load_config()
 
-# config.json is the primary source; .env GOOGLE_DRIVE_FOLDER_ID is a fallback for backwards compat
-DRIVE_FOLDER_ID = (
-    CONFIG.get("drive", {}).get("folder_id", "").strip()
-    or os.getenv("GOOGLE_DRIVE_FOLDER_ID", "").strip()
-)
+DRIVE_FOLDER_ID = CONFIG.get("drive", {}).get("folder_id", "").strip()
 
 DEFAULT_LANGS = CONFIG.get("document", {}).get("default_languages", ["EN", "FR", "AR", "ZH"])

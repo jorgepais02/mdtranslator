@@ -77,19 +77,16 @@ def run_wizard(preselected_source: str = None) -> dict | None:
         if confirm:
             import subprocess
             console.print(f"[{DIM}]Formatting with Gemini AI…[/{DIM}]")
-            gen_md = (base_dir / "src" / "generate_markdown.py").resolve()
-            if not gen_md.exists():
-                console.print(f"[red]✗ Script not found: {gen_md}[/red]")
-                return None
             result = subprocess.run(
-                [sys.executable, str(gen_md), str(source_path)],
+                [sys.executable, "-m", "src.integrations.generate_md", str(source_path)],
                 cwd=str(base_dir), capture_output=True, text=True,
             )
             if result.returncode == 0:
                 source = source_path.with_suffix(".md").name
                 console.print(f"[{GREEN}]✓ Formatted → {source}[/{GREEN}]\n")
             else:
-                console.print("[yellow]✗ Formatting failed, continuing with original.[/yellow]")
+                err = result.stderr.strip() or result.stdout.strip()
+                console.print(f"[yellow]✗ Formatting failed: {err}[/yellow]\n")
 
     # ── 2. Provider ───────────────────────────────────────────────────
     provider_choices = ["Azure AI Translator", "DeepL API", "Auto (fallback)"]
