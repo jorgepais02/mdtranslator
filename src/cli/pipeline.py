@@ -6,6 +6,8 @@ import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from langdetect import detect as _detect_lang, DetectorFactory as _LDF
+_LDF.seed = 0
 from .styles import console, GREEN, BLUE, YELLOW, CYAN, DIM, BRIGHT, FG, needs_refine
 
 from translators import get_translator
@@ -152,63 +154,77 @@ def run_pipeline(config: dict) -> list[dict]:
             view.set_progress(10)
             live.update(view.render())
 
-            # ES original — always when uploading to Drive, or when explicitly requested
-            es_langs = {l for l in languages if l.upper().startswith("ES")}
-            if es_langs or use_google:
-                es_folder = TRANSLATED_DIR / "es"
-                es_folder.mkdir(parents=True, exist_ok=True)
-                es_stem = _local_stem(f_path.stem, "es")
-                es_file = es_folder / f"{es_stem}.md"
-                if not es_file.exists() or es_file.read_text(encoding="utf-8") != src_content:
-                    es_file.write_text(src_content, encoding="utf-8")
-                es_ok      = True
-                es_url     = None
-                es_warning = None
+            # Source original — always generate DOCX locally; upload to Drive only if selected
+            try:
+                src_lang = _detect_lang(src_content[:1000])
+            except Exception:
+                src_lang = None
+
+            if src_lang:
+                src_folder = TRANSLATED_DIR / src_lang
+                src_folder.mkdir(parents=True, exist_ok=True)
+                src_stem = _local_stem(f_path.stem, src_lang)
+                src_file = src_folder / f"{src_stem}.md"
+                if not src_file.exists() or src_file.read_text(encoding="utf-8") != src_content:
+                    src_file.write_text(src_content, encoding="utf-8")
+                src_ok      = True
+                src_url     = None
+                src_warning = None
+                src_selected = {l for l in languages if l.lower().split("-")[0] == src_lang}
                 try:
-                    docx_es = es_file.with_suffix(".docx")
-                    if not docx_es.exists() or es_file.stat().st_mtime > docx_es.stat().st_mtime:
-                        docx_es = generate_docx_document(es_file, "es")
+                    docx_src = src_file.with_suffix(".docx")
+                    if not docx_src.exists() or src_file.stat().st_mtime > docx_src.stat().st_mtime:
+                        docx_src = generate_docx_document(src_file, src_lang)
                     if not no_local:
-                        pdf_es = docx_es.with_suffix(".pdf")
-                        if not pdf_es.exists() or docx_es.stat().st_mtime > pdf_es.stat().st_mtime:
+                        pdf_src = docx_src.with_suffix(".pdf")
+                        if not pdf_src.exists() or docx_src.stat().st_mtime > pdf_src.stat().st_mtime:
                             try:
-                                convert_docx_to_pdf(docx_es)
+                                convert_docx_to_pdf(docx_src)
                             except Exception as pdf_err:
-                                es_warning = str(pdf_err)
-                    if use_google:
-                        gm  = GoogleDocsManager(console=console)
+                                src_warning = str(pdf_err)
+                    if use_google and src_selected:
+                        gm  = GoogleDocsManager(console=console, creds=shared_creds)
                         tgt = DRIVE_FOLDER_ID
                         if CONFIG.get("drive", {}).get("organize_by_language"):
-                            tgt = gm.resolve_language_folder(tgt, "es", CONFIG["drive"].get("language_folder_names"))
-                        name = gm.resolve_filename(title=f_path.stem, folder_id=tgt, lang="es",
+                            tgt = gm.resolve_language_folder(tgt, src_lang, CONFIG["drive"].get("language_folder_names"))
+                        name = gm.resolve_filename(title=f_path.stem, folder_id=tgt, lang=src_lang,
                             sequential_naming=CONFIG.get("drive", {}).get("sequential_naming", False),
                             sequential_naming_pattern=CONFIG.get("drive", {}).get("sequential_naming_pattern"))
-                        doc_id = gm.upload_docx(docx_es, tgt, filename=name)
-                        es_url = gm.get_document_url(doc_id)
-                except Exception:
-                    es_ok = False
+                        doc_id = gm.upload_docx(docx_src, tgt, filename=name)
+                        src_url = gm.get_document_url(doc_id)
+                except Exception as src_err:
+                    src_ok = False
+                    src_warning = str(src_err)
                 all_results.append({
-                    "lang":      "ES",
-                    "file":      f"{es_stem}.docx" if es_ok else "—",
-                    "ok":        es_ok,
+                    "lang":      src_lang.upper(),
+                    "file":      f"{src_stem}.docx" if src_ok else "—",
+                    "ok":        src_ok,
                     "time":      0.0,
-                    "gdocs_url": es_url,
-                    "warning":   es_warning,
+                    "gdocs_url": src_url,
+                    "warning":   src_warning,
                 })
 
-            non_es_languages = [l for l in languages if not l.upper().startswith("ES")]
-            total        = len(non_es_languages)
+            non_src_languages = [l for l in languages if src_lang is None or l.lower().split("-")[0] != src_lang]
+            total        = len(non_src_languages)
             completed    = 0
-            counter_lock  = threading.Lock()
-            gemini_sem    = threading.Semaphore(1)  # Gemini free tier: serialize refinement calls
+            view_lock    = threading.Lock()
+            gemini_sem   = threading.Semaphore(1)  # Gemini free tier: serialize refinement calls
+
+            def _update(lang: str | None = None, status: str | None = None,
+                        elapsed: float | None = None, pct: int | None = None) -> None:
+                with view_lock:
+                    if lang and status is not None:
+                        view.set_lang_status(lang, status, elapsed)
+                    if pct is not None:
+                        view.set_progress(pct)
+                    live.update(view.render())
 
             def _process_lang(lang: str) -> dict:
                 nonlocal completed
                 short     = lang.lower().split("-")[0]
                 g_manager = GoogleDocsManager(console=console, creds=shared_creds) if use_google else None
 
-                view.set_lang_status(lang, "translating…")
-                live.update(view.render())
+                _update(lang=lang, status="translating…")
 
                 t_lang      = time.monotonic()
                 ok          = True
@@ -220,14 +236,12 @@ def run_pipeline(config: dict) -> list[dict]:
                     rebuilt    = rebuild_markdown_from_translations(parsed, translated)
 
                     if needs_refine(lang):
-                        view.set_lang_status(lang, "refining…")
-                        live.update(view.render())
+                        _update(lang=lang, status="refining…")
                         with gemini_sem:
                             rebuilt, refine_warn = refine_markdown(rebuilt, lang)
                         if refine_warn:
                             warning = refine_warn
-                            view.set_lang_status(lang, "✓ unrefined")
-                            live.update(view.render())
+                            _update(lang=lang, status="✓ unrefined")
 
                     lang_folder = TRANSLATED_DIR / short
                     lang_folder.mkdir(parents=True, exist_ok=True)
@@ -249,8 +263,7 @@ def run_pipeline(config: dict) -> list[dict]:
                                 warning = warning or str(pdf_err)
 
                     if g_manager:
-                        view.set_lang_status(lang, "uploading…")
-                        live.update(view.render())
+                        _update(lang=lang, status="uploading…")
                         tgt = DRIVE_FOLDER_ID
                         if CONFIG.get("drive", {}).get("organize_by_language"):
                             tgt = g_manager.resolve_language_folder(tgt, short, CONFIG["drive"].get("language_folder_names"))
@@ -264,16 +277,16 @@ def run_pipeline(config: dict) -> list[dict]:
                     ok      = False
                     warning = str(e)
                     err     = warning.lower()
-                    view.set_lang_status(lang, "✗ auth fail" if "auth" in err else "✗ timeout" if "timeout" in err else "✗ failed")
+                    _update(lang=lang, status="✗ auth fail" if "auth" in err else "✗ timeout" if "timeout" in err else "✗ failed")
 
                 elapsed = time.monotonic() - t_lang
                 if ok:
-                    view.set_lang_status(lang, "✓ generated", elapsed)
+                    _update(lang=lang, status="✓ generated", elapsed=elapsed)
 
-                with counter_lock:
+                with view_lock:
                     completed += 1
                     view.set_progress(10 + int((completed / total) * 80))
-                live.update(view.render())
+                    live.update(view.render())
 
                 if no_local and (TRANSLATED_DIR / short).exists():
                     shutil.rmtree(TRANSLATED_DIR / short)
@@ -287,20 +300,19 @@ def run_pipeline(config: dict) -> list[dict]:
                     "warning":   warning,
                 }
 
-            if non_es_languages:
-                max_workers = min(len(non_es_languages), 4)
+            if non_src_languages:
+                max_workers = min(len(non_src_languages), 4)
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    futures = {executor.submit(_process_lang, lang): lang for lang in non_es_languages}
+                    futures = {executor.submit(_process_lang, lang): lang for lang in non_src_languages}
                     for future in as_completed(futures):
                         try:
                             all_results.append(future.result())
                         except Exception:
                             pass
 
-            if no_local and es_langs and es_folder.exists():
-                shutil.rmtree(es_folder)
+            if no_local and src_lang and src_folder.exists():
+                shutil.rmtree(src_folder)
 
-            view.set_progress(100)
-            live.update(view.render())
+            _update(pct=100)
 
     return all_results

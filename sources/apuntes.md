@@ -1,28 +1,260 @@
-# Análisis forense de tráfico de red (IV)
+# Test M10
 
-## Recuperación de objetos HTTP
+## **1. ¿Qué modelo de servicio representa Office 365?**
 
-Para una prueba, se creó una página HTML sencilla con un párrafo y una imagen, servida mediante `sudo python3 -m http.server 80` en localhost. Inicialmente, no se capturaba tráfico porque Wireshark escuchaba en la interfaz NS33. Al cambiar a la interfaz EMI (loopback), el tráfico HTTP se hizo visible en texto plano.
+A) Infraestructura como servicio (IaaS)  
 
-Para recuperar la imagen del tráfico, se utiliza la función "Exportar objetos HTTP", donde se puede guardar el archivo `kitten.jpg` directamente. Esta técnica es aplicable a cualquier página o aplicación que utilice HTTP en plano. Aunque menos común en la web actual, sigue siendo relevante para muchas aplicaciones móviles que, por supuesta eficiencia, no cifran tráfico considerado no privado o irrelevante, permitiendo la extracción de imágenes o código HTML.
+B) Plataforma como servicio (PaaS)  
 
-## Análisis de flujos (Streams)
+C) **Software como servicio (SaaS)**  
 
-Para visualizar la comunicación completa de un flujo, se puede hacer clic derecho sobre un paquete y seleccionar "Follow TCP Stream" (o "Follow HTTP Stream"). Wireshark mostrará la petición inicial (GET), todas las cabeceras HTTP de petición y respuesta, y el contenido final (HTML), diferenciando visualmente la petición y la respuesta con colores distintos. Esta funcionalidad también está disponible para otros protocolos, como DNS, utilizando "Follow UDP Stream" para ver consultas a dominios en plano.
+D) Red como servicio (NaaS)  
 
-## Filtros de visualización avanzados
+<u>SOL: C)</u>
 
-Wireshark proporciona filtros de visualización potentes para una inspección específica. A diferencia de los BPF (Berkeley Packet Filters), estos filtros no descartan paquetes de la captura, sino que solo ocultan aquellos que no cumplen el criterio en la interfaz de visualización. Es posible filtrar por cualquier campo que Wireshark pueda diseccionar.
 
-- Filtros simples: Se introduce el nombre del protocolo, como `dns`, `http` o `arp`.
+## **2. ¿Dónde se almacenan los datos en Office 365?**
 
-- Operadores lógicos y de contenido:
-    - `http.referer == "http://localhost/"`: Para identificar la página de origen que llevó a otra.
-    - `http.user_agent contains "Mozilla"`: Para determinar el explorador y sistema operativo del usuario (ej., Firefox en Linux).
-    - `http.request.full_uri contains "kit"`: Para localizar una petición específica, como la de la imagen del gatito.
+A) En servidores locales  
 
-## Filtrado de protocolos (Caso DNS)
+B) En dispositivos del usuario  
 
-Para visualizar únicamente las respuestas DNS, se puede aplicar el filtro `dns.flags.response == 1` en la disección de protocolos. Si se establece el valor en `0`, se mostrarán las consultas (queries).
+C) En servidores híbridos  
 
-Para una búsqueda más específica, como determinar la dirección IP exacta a la que se tradujo un dominio como `google.com`, se puede combinar la respuesta con el contenido del paquete utilizando el filtro `dns.flags.response == 1 and frame contains "google"`. En un ejemplo práctico, una consulta a Google se tradujo a la dirección IP `142.250.201.68`.
+D) **En la nube de Microsoft**  
+
+<u>SOL: D)</u>
+
+
+## **3. ¿Cuál es el plan que incluye más capacidades de seguridad?**
+
+A) Básico  
+
+B) Estándar  
+
+C) E3  
+
+D) **E5**  
+
+<u>SOL: D)</u>
+
+
+## **4. ¿Cuál es el principal riesgo de accesibilidad en O365?**
+
+A) Falta de almacenamiento  
+
+B) Baja velocidad  
+
+C) **Acceso desde internet con credenciales**  
+
+D) Falta de backups  
+
+<u>SOL: C)</u>
+
+
+## **5. ¿Qué problema es habitual respecto al MFA?**
+
+A) Está siempre activado  
+
+B) No funciona en la nube  
+
+C) Es obligatorio  
+
+D) **No suele estar habilitado por defecto**  
+
+<u>SOL: D)</u>
+
+
+## **6. ¿Qué riesgo implica el uso de roles como Administrador Global?**
+
+A) Reducción de permisos  
+
+B) Mejora del rendimiento  
+
+C) **Compromiso total de la organización si se roba la cuenta**  
+
+D) Eliminación de logs  
+
+<u>SOL: C)</u>
+
+
+## **7. ¿Cuánto tiempo se conservan los logs por defecto en O365?**
+
+A) 30 días  
+
+B) 60 días  
+
+C) **90 días**  
+
+D) 1 año  
+
+<u>SOL: C)</u>
+
+
+## **8. ¿Cuánto tiempo se conservan los logs con licencia E5?**
+
+A) 6 meses  
+
+B) **1 año**  
+
+C) 2 años  
+
+D) Indefinido  
+
+<u>SOL: B)</u>
+
+
+## **9. ¿Cuál es la fuente principal de información en O365 forense?**
+
+A) DNS Logs  
+
+B) Firewall Logs  
+
+C) **UAL (Unified Audit Logs)**  
+
+D) Cookies  
+
+<u>SOL: C)</u>
+
+
+## **10. ¿Qué permiten los AAL?**
+
+A) Ver tráfico DNS  
+
+B) **Analizar accesos a correos concretos y búsquedas**  
+
+C) Ver direcciones MAC  
+
+D) Ver solo logs básicos  
+
+<u>SOL: B)</u>
+
+
+## **11. ¿Qué tipo de información proporciona MAL?**
+
+A) Red  
+
+B) Sistema operativo  
+
+C) **Actividad en buzones de correo**  
+
+D) Conexiones VPN  
+
+<u>SOL: C)</u>
+
+
+## **12. ¿Qué es Message Trace?**
+
+A) Un sistema de backup  
+
+B) **Metadatos de correos (origen, destino, fecha, IP)**  
+
+C) Un firewall  
+
+D) Un antivirus  
+
+<u>SOL: B)</u>
+
+
+## **13. ¿Cuál es la mejor herramienta recomendada para adquisición?**
+
+A) Wireshark  
+
+B) Excel  
+
+C) **PowerShell**  
+
+D) FTP  
+
+<u>SOL: C)</u>
+
+
+## **14. ¿Qué herramienta destaca para análisis forense en O365?**
+
+A) Nmap  
+
+B) Metasploit  
+
+C) **Hawk**  
+
+D) Burp Suite  
+
+<u>SOL: C)</u>
+
+
+## **15. ¿Qué técnica consiste en alternar entre IPs y usuarios?**
+
+A) Hashing  
+
+B) Sniffing  
+
+C) **Pivotado**  
+
+D) Clonado  
+
+<u>SOL: C)</u>
+
+
+## **16. ¿Qué permite una línea temporal (timeline)?**
+
+A) Eliminar logs  
+
+B) **Visualizar la secuencia del incidente**  
+
+C) Cifrar datos  
+
+D) Bloquear accesos  
+
+<u>SOL: B)</u>
+
+
+## **17. ¿Qué acción usan los atacantes para ocultar correos?**
+
+A) Cifrado  
+
+B) Eliminación directa  
+
+C) **Reglas de entrada**  
+
+D) Backup  
+
+<u>SOL: C)</u>
+
+
+## **18. ¿Qué permiten las aplicaciones OAuth maliciosas?**
+
+A) Mejorar seguridad  
+
+B) **Acceso sin pasar por MFA**  
+
+C) Eliminar cuentas  
+
+D) Aumentar velocidad  
+
+<u>SOL: B)</u>
+
+
+## **19. ¿Cuál es la primera acción de contención recomendada?**
+
+A) Borrar logs  
+
+B) **Cambiar contraseñas**  
+
+C) Apagar servidores  
+
+D) Eliminar usuarios  
+
+<u>SOL: B)</u>
+
+
+## **20. ¿Cuál es uno de los factores más críticos en un forense O365?**
+
+A) Tamaño del disco  
+
+B) Tipo de navegador  
+
+C) **El tiempo (retención de logs)**  
+
+D) Sistema operativo  
+
+<u>SOL: C)</u>

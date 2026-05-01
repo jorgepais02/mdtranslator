@@ -13,29 +13,38 @@ from .wizard import run_wizard
 from .confirmation import show_confirmation
 from .pipeline import run_pipeline
 from .results import show_results
+from .styles import LANGUAGES
 from .styles import console, clear_screen
 
 VERSION = "2.1.0"
 
+_OUTPUT_MAP = {
+    "local": "Local only",
+    "drive": "Google Drive",
+    "both":  "Local + Google Drive",
+}
+
 def parse_args():
     parser = argparse.ArgumentParser(description="mdtranslator CLI")
     parser.add_argument("file",        nargs="?", default=None)
-    parser.add_argument("--lang",      default=None)
-    parser.add_argument("--provider",  default=None)
-    parser.add_argument("--output",    default=None)
+    parser.add_argument("--lang",      nargs="+",  default=None, metavar="LANG")
+    parser.add_argument("--provider",  default=None, choices=["azure", "deepl", "auto"])
+    parser.add_argument("--output",    default=None, choices=list(_OUTPUT_MAP))
     parser.add_argument("--yes", "-y", action="store_true")
     parser.add_argument("--json",      action="store_true")
-    parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("--version",   action="version", version=f"mdtranslator {VERSION}")
     return parser.parse_args()
 
 def build_config_from_args(args) -> dict:
-    provider_map = {"Azure AI Translator": "azure", "DeepL API": "deepl", "Auto (fallback)": "auto"}
+    langs = [l.upper() for l in args.lang] if args.lang else ["EN"]
+    unknown = [l for l in langs if l not in LANGUAGES]
+    if unknown:
+        print(f"warning: unrecognized language code(s): {', '.join(unknown)}", file=sys.stderr)
     return {
         "source":    args.file or "Process ALL files",
-        "provider":  provider_map.get(args.provider or "", args.provider or "auto"),
-        "output":    args.output or "Local only",
-        "languages": args.lang.upper().split() if args.lang else ["EN"],
+        "provider":  args.provider or "auto",
+        "output":    _OUTPUT_MAP.get(args.output or "", "Local only"),
+        "languages": langs,
     }
 
 def print_json_results(results: list[dict], total_time: float):
@@ -58,9 +67,9 @@ def main():
     except KeyboardInterrupt:
         _abort()
 
-def _run(args):
-    provider_map = {"Azure AI Translator": "azure", "DeepL API": "deepl", "Auto (fallback)": "auto"}
+_PROVIDER_MAP = {"Azure AI Translator": "azure", "DeepL API": "deepl", "Auto (fallback)": "auto"}
 
+def _run(args):
     # Stage 1 — Wizard (prints its own header, no clear needed)
     if args.json or args.lang:
         config = build_config_from_args(args)
@@ -70,7 +79,7 @@ def _run(args):
     if config is None:
         _abort()
 
-    config["provider"] = provider_map.get(config["provider"], config["provider"])
+    config["provider"] = _PROVIDER_MAP.get(config["provider"], config["provider"])
 
     # Stage 2 — Confirmation
     if not args.yes and not args.json:

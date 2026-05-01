@@ -41,9 +41,10 @@ class TranslationCache:
 
     def get(self, text: str, lang: str, provider: str) -> str | None:
         key = self._key(text, lang, provider)
-        row = self._conn.execute(
-            "SELECT text FROM translations WHERE key = ?", (key,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT text FROM translations WHERE key = ?", (key,)
+            ).fetchone()
         return row[0] if row else None
 
     def set(self, text: str, lang: str, provider: str, translation: str) -> None:

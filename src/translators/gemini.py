@@ -1,5 +1,8 @@
 import os
+import re
 from .base import BaseTranslator, TranslationError
+
+_NUM_PREFIX_RE = re.compile(r"^\d+\.\s*")
 
 
 class GeminiTranslator(BaseTranslator):
@@ -49,15 +52,12 @@ class GeminiTranslator(BaseTranslator):
             try:
                 response = self._client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
                 lines = [l.strip() for l in response.text.strip().splitlines() if l.strip()]
-                cleaned = []
-                for idx, line in enumerate(lines):
-                    prefix = f"{idx+1}. "
-                    if line.startswith(prefix):
-                        cleaned.append(line[len(prefix):])
-                    elif line.startswith(f"{idx+1}."):
-                        cleaned.append(line[len(f"{idx+1}."):].lstrip())
-                    else:
-                        cleaned.append(line)
+                # If Gemini added commentary or blank lines, try keeping only numbered lines
+                if len(lines) != len(chunk):
+                    numbered = [l for l in lines if _NUM_PREFIX_RE.match(l)]
+                    if len(numbered) == len(chunk):
+                        lines = numbered
+                cleaned = [_NUM_PREFIX_RE.sub("", l) for l in lines]
                 if len(cleaned) != len(chunk):
                     raise TranslationError(f"Gemini returned {len(cleaned)} lines for {len(chunk)} inputs")
                 results.extend(cleaned)

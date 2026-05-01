@@ -30,11 +30,15 @@ def get_translator(fallback_order: list[str] | str) -> BaseTranslator:
 
     Args:
         fallback_order: Provider IDs in priority order, or 'auto' to use all available.
+                        With 'auto', every configured provider is tried in order.
+                        With explicit IDs, only those providers are used — no silent fallback
+                        to others.
     """
     if isinstance(fallback_order, str):
         fallback_order = [fallback_order]
 
-    if not fallback_order or fallback_order[0].lower() == "auto":
+    is_auto = not fallback_order or fallback_order[0].lower() == "auto"
+    if is_auto:
         fallback_order = list(AVAILABLE_TRANSLATORS.keys())
 
     cache = TranslationCache()
@@ -42,22 +46,14 @@ def get_translator(fallback_order: list[str] | str) -> BaseTranslator:
 
     for provider_id in fallback_order:
         provider_id = provider_id.lower()
-        if provider_id in AVAILABLE_TRANSLATORS:
-            _, cls = AVAILABLE_TRANSLATORS[provider_id]
-            try:
-                translators.append(CachingTranslator(cls(), cache))
-            except TranslationError as e:
-                if provider_id == fallback_order[0].lower():
-                    raise TranslationError(f"Failed to initialize requested provider '{provider_id}': {e}")
-
-    # Append any available providers not explicitly requested
-    seen = {type(t.translator) for t in translators if isinstance(t, CachingTranslator)}
-    for provider_id, (_, cls) in AVAILABLE_TRANSLATORS.items():
-        if provider_id not in [p.lower() for p in fallback_order] and cls not in seen:
-            try:
-                translators.append(CachingTranslator(cls(), cache))
-            except TranslationError:
-                pass
+        if provider_id not in AVAILABLE_TRANSLATORS:
+            continue
+        _, cls = AVAILABLE_TRANSLATORS[provider_id]
+        try:
+            translators.append(CachingTranslator(cls(), cache))
+        except TranslationError as e:
+            if not is_auto and provider_id == fallback_order[0].lower():
+                raise TranslationError(f"Failed to initialize provider '{provider_id}': {e}")
 
     if not translators:
         raise TranslationError(

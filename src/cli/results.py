@@ -11,7 +11,8 @@ def _short_warning(msg: str) -> str:
     lo  = msg.lower()
 
     # ── Gemini refiner ────────────────────────────────────────────────
-    if "429" in msg or "resource_exhausted" in lo or ("quota" in lo and "gemini" in lo):
+    if "resource_exhausted" in lo or ("quota" in lo and "gemini" in lo) \
+            or ("429" in msg and "gemini" in lo):
         return "Gemini quota exceeded — text not refined"
     if "gemini_api_key" in lo or ("gemini" in lo and "api_key" in lo):
         return "Gemini API key not set — text not refined"
@@ -33,6 +34,10 @@ def _short_warning(msg: str) -> str:
         return "Azure API key not set — add AZURE_TRANSLATOR_KEY to .env"
     if "request failed" in lo and ("deepl" in lo or "azure" in lo or "gemini" in lo):
         return "Translation API timed out" if "timeout" in lo else "Translation API request failed"
+
+    # ── Missing packages ─────────────────────────────────────────────
+    if "no module named 'pil'" in lo or "no module named 'pillow'" in lo:
+        return "Pillow not installed — run: pip install Pillow"
 
     # ── PDF ───────────────────────────────────────────────────────────
     if "libreoffice not found" in lo:

@@ -124,20 +124,38 @@ def run_wizard(preselected_source: str = None) -> dict | None:
     console.print(more_line)
     console.print()
 
-    langs_raw = _ask(lambda: questionary.text(
-        "Target languages",
-        instruction="",
-        style=WIZARD_STYLE,
-        erase_when_done=True,
-        validate=lambda v: True if v.strip() else "Enter at least one language code",
-    ).ask())
-    if langs_raw is None:
-        return None
-    _print_text("Target languages", "", langs_raw.upper())
+    while True:
+        langs_raw = _ask(lambda: questionary.text(
+            "Target languages",
+            instruction="",
+            style=WIZARD_STYLE,
+            erase_when_done=True,
+            validate=lambda v: True if v.strip() else "Enter at least one language code",
+        ).ask())
+        if langs_raw is None:
+            return None
 
-    langs = langs_raw.upper().split()
-    unknown = [l for l in langs if l not in LANGUAGES]
-    if unknown:
-        console.print(f"[yellow]⚠ Unknown code(s): {', '.join(unknown)} — proceeding anyway[/yellow]\n")
-    
+        langs = langs_raw.upper().split()
+        unknown = [l for l in langs if l not in LANGUAGES]
+
+        if not unknown:
+            _print_text("Target languages", "", langs_raw.upper())
+            break
+
+        console.print(f"[yellow]⚠ Unrecognized: {', '.join(unknown)}[/yellow]")
+        console.print(f"[{DIM}]  These may still work if the provider supports them (e.g. EN-GB, PT-BR).[/{DIM}]\n")
+
+        proceed = _ask(lambda: questionary.confirm(
+            "Proceed anyway?",
+            default=False,
+            style=WIZARD_STYLE,
+            erase_when_done=True,
+        ).ask())
+        if proceed is None:
+            return None
+        if proceed:
+            _print_text("Target languages", "", langs_raw.upper())
+            break
+        console.print()
+
     return {"source": source, "provider": provider, "output": output, "languages": langs}

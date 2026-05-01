@@ -12,7 +12,7 @@ Usage:
     python -m src.document.postprocess output.docx [--lang zh] [--header public/header.png]
 """
 
-import argparse, shutil, struct, tempfile, zipfile
+import argparse, shutil, tempfile, zipfile
 from pathlib import Path
 from lxml import etree
 
@@ -222,10 +222,9 @@ def fix_cjk_fonts(doc_root, styles_root):
 
 
 def inject_header(tmp: Path, img: Path):
-    with open(img, 'rb') as f:
-        f.read(16)
-        iw = struct.unpack('>I', f.read(4))[0]
-        ih = struct.unpack('>I', f.read(4))[0]
+    from PIL import Image
+    with Image.open(img) as _im:
+        iw, ih = _im.size
     MAX = 5_760_000
     ew = min(iw * 9525, MAX)
     eh = int(ih * 9525 * ew / (iw * 9525))
