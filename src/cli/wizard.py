@@ -1,8 +1,9 @@
-import sys
 import questionary
 from pathlib import Path
 from rich.text import Text
 from .styles import console, WIZARD_STYLE, LANGUAGES, GREEN, BLUE, DIM, FG, BRIGHT
+
+from core.sources import ALL_FILES, VALID_EXTS, collect_sources, needs_formatting
 
 VERSION = "2.1.0"
 
@@ -36,12 +37,11 @@ def run_wizard(preselected_source: str = None) -> dict | None:
     sources_dir = base_dir / "sources"
 
     # ── 1. Source file ────────────────────────────────────────────────
-    source_choices = ["Process ALL files"]
+    source_choices = [ALL_FILES]
     if sources_dir.exists():
-        valid_exts = {".md", ".txt"}
         source_choices.extend(sorted(
             f.name for f in sources_dir.iterdir()
-            if f.is_file() and f.suffix.lower() in valid_exts
+            if f.is_file() and f.suffix.lower() in VALID_EXTS
         ))
 
     if preselected_source:
@@ -58,35 +58,37 @@ def run_wizard(preselected_source: str = None) -> dict | None:
 
     _print_select("Select source file", source_choices, source)
 
-    # ── .txt → markdown ───────────────────────────────────────────────
-    if source != "Process ALL files" and source.lower().endswith(".txt"):
-        source_path = (sources_dir / Path(source).name).resolve()
-        if not source_path.exists():
-            console.print(f"[red]✗ File not found: {source_path}[/red]")
-            return None
+    # ── Raw text → Markdown ───────────────────────────────────────────
+    # The wizard only asks; the pipeline does the formatting.
+    selected = collect_sources(source, sources_dir)
+    if not selected:
+        console.print(f"[red]✗ No source files found for: {source}[/red]")
+        return None
 
-        confirm = _ask(lambda: questionary.confirm(
-            f"Format {source_path.name} into Markdown with Gemini AI?",
+    if source == ALL_FILES:
+        listing = Text()
+        listing.append(f"  {len(selected)} file(s):  ", style=DIM)
+        listing.append("  ".join(p.name for p in selected), style=BRIGHT)
+        console.print(listing)
+        console.print()
+
+    raw = [p for p in selected if needs_formatting(p)]
+    format_raw = False
+    if raw:
+        names = ", ".join(p.name for p in raw[:3]) + ("…" if len(raw) > 3 else "")
+        label = (f"Format {names} into Markdown with Gemini AI?" if len(raw) == 1
+                 else f"Format {len(raw)} raw files ({names}) into Markdown with Gemini AI?")
+        answer = _ask(lambda: questionary.confirm(
+            label,
             default=True,
             style=WIZARD_STYLE,
             erase_when_done=True,
         ).ask())
-        if confirm is None:
+        if answer is None:
             return None
-
-        if confirm:
-            import subprocess
-            console.print(f"[{DIM}]Formatting with Gemini AI…[/{DIM}]")
-            result = subprocess.run(
-                [sys.executable, "-m", "src.integrations.generate_md", str(source_path)],
-                cwd=str(base_dir), capture_output=True, text=True,
-            )
-            if result.returncode == 0:
-                source = source_path.with_suffix(".md").name
-                console.print(f"[{GREEN}]✓ Formatted → {source}[/{GREEN}]\n")
-            else:
-                err = result.stderr.strip() or result.stdout.strip()
-                console.print(f"[yellow]✗ Formatting failed: {err}[/yellow]\n")
+        format_raw = answer
+        console.print(f"[{FG}]{label}[/{FG}]")
+        console.print(f"  [bold {GREEN}]❯ {'Yes' if format_raw else 'No'}[/bold {GREEN}]\n")
 
     # ── 2. Provider ───────────────────────────────────────────────────
     provider_choices = ["Azure AI Translator", "DeepL API", "Auto (fallback)"]
@@ -158,4 +160,11 @@ def run_wizard(preselected_source: str = None) -> dict | None:
             break
         console.print()
 
-    return {"source": source, "provider": provider, "output": output, "languages": langs}
+    return {
+        "source":     source,
+        "provider":   provider,
+        "output":     output,
+        "languages":  langs,
+        "format_raw": format_raw,
+        "files":      [p.name for p in selected],
+    }

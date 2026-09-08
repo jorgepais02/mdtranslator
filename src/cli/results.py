@@ -68,6 +68,8 @@ def _short_warning(msg: str) -> str:
 
 def show_results(results: list[dict], total_time: float, version: str = "2.1.0"):
     parts = []
+    # Several source files land in one table, so name the source to keep rows apart.
+    multi = len({r.get("source") for r in results if r.get("source")}) > 1
 
     # ── Results table ─────────────────────────────────────────────────
     parts.append(Text("Results", style=f"bold {BLUE}"))
@@ -80,13 +82,19 @@ def show_results(results: list[dict], total_time: float, version: str = "2.1.0")
         header_style=DIM,   # dim uppercase headers per spec
     )
     file_table.add_column("LANG",   style=CYAN,  width=8)
+    if multi:
+        file_table.add_column("SOURCE", style=DIM)
     file_table.add_column("FILE",   style=FG)
     file_table.add_column("STATUS", width=8)
     file_table.add_column("TIME",   style=DIM, justify="right", width=8)
 
     for r in results:
         status = Text("✓", style=GREEN) if r["ok"] else Text("✗", style="#e05555")
-        file_table.add_row(r["lang"], r["file"], status, f"{r['time']:.1f}s")
+        row = [r["lang"]]
+        if multi:
+            row.append(r.get("source", "—"))
+        row.extend([r["file"], status, f"{r['time']:.1f}s"])
+        file_table.add_row(*row)
 
     parts.append(file_table)
     parts.append(Text())
@@ -103,6 +111,8 @@ def show_results(results: list[dict], total_time: float, version: str = "2.1.0")
             header_style=DIM,
         )
         gdocs_table.add_column("LANG", style=CYAN, width=8)
+        if multi:
+            gdocs_table.add_column("SOURCE", style=DIM)
         gdocs_table.add_column("URL")
 
         for r in results:
@@ -111,18 +121,24 @@ def show_results(results: list[dict], total_time: float, version: str = "2.1.0")
                 short_url = url if len(url) <= 45 else url[:42] + "…"
                 link = Text()
                 link.append(short_url, style=f"link {url} {BLUE} underline")
-                gdocs_table.add_row(r["lang"], link)
+                row = [r["lang"]]
+                if multi:
+                    row.append(r.get("source", "—"))
+                row.append(link)
+                gdocs_table.add_row(*row)
 
         parts.append(gdocs_table)
         parts.append(Text())
 
     # ── Warnings ──────────────────────────────────────────────────────
-    warnings = [(r["lang"], r["warning"]) for r in results if r.get("warning")]
+    warnings = [(r["lang"], r.get("source"), r["warning"]) for r in results if r.get("warning")]
     if warnings:
         parts.append(Text("Warnings", style=f"bold {YELLOW}"))
-        for lang, msg in warnings:
+        for lang, source, msg in warnings:
             line = Text()
             line.append(f"  {lang:>3}  ", style=CYAN)
+            if multi and source:
+                line.append(f"{source}  ", style=DIM)
             line.append(_short_warning(msg), style=DIM)
             parts.append(line)
         parts.append(Text())

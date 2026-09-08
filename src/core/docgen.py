@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 import platform
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from .config import CONFIG, PROJECT_ROOT
@@ -31,10 +33,17 @@ def _soffice_exe() -> str:
 def convert_docx_to_pdf(docx_file: Path) -> None:
     """Convert a DOCX to PDF using LibreOffice headless. Raises RuntimeError on failure."""
     outdir = docx_file.parent
+    pdf_file = docx_file.with_suffix(".pdf")
+
+    # LibreOffice locks a single shared user profile: concurrent calls that reuse it
+    # attach to the running instance and return 0 without writing any PDF. A private
+    # profile per call keeps parallel conversions independent.
+    profile = Path(tempfile.mkdtemp(prefix="mdtranslator-lo-"))
     try:
         result = subprocess.run(
             [
                 _soffice_exe(),
+                f"-env:UserInstallation=file://{profile}",
                 "--headless", "--norestore", "--nofirststartwizard", "--nologo",
                 "--convert-to", "pdf",
                 "--outdir", str(outdir),
@@ -42,11 +51,15 @@ def convert_docx_to_pdf(docx_file: Path) -> None:
             ],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=180,
         )
         if result.returncode != 0:
             raise RuntimeError(f"PDF conversion failed: {result.stderr.strip()}")
+        if not pdf_file.exists():
+            raise RuntimeError("PDF conversion failed: LibreOffice produced no output")
     except FileNotFoundError:
         raise RuntimeError("LibreOffice not found — install: brew install --cask libreoffice")
     except subprocess.TimeoutExpired:
         raise RuntimeError("PDF conversion timed out")
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)

@@ -14,10 +14,16 @@ def show_confirmation(config: dict) -> bool:
     table.add_column("key",   style=DIM,  width=14)
     table.add_column("value", style=FG,   min_width=20)
 
-    table.add_row("File",      config["source"])
+    files = config.get("files") or []
+    if len(files) > 1:
+        table.add_row(f"Files ({len(files)})", "\n".join(files))
+    else:
+        table.add_row("File", files[0] if files else config["source"])
     table.add_row("Provider",  config["provider"])
     table.add_row("Languages", "  ".join(config["languages"]))
     table.add_row("Output",    config["output"])
+    if config.get("format_raw"):
+        table.add_row("Raw text", "format with Gemini")
 
     terminal_width = shutil.get_terminal_size().columns
     panel_width = min(60, max(40, terminal_width - 2))

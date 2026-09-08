@@ -103,6 +103,23 @@ def rebuild_markdown_from_translations(
     out: list[str] = []
     t_idx = 0
 
+    def _next(original: str) -> str:
+        """Take the next translation for a line, or keep the original.
+
+        Only non-empty text is sent to a provider, so a structural line with no
+        content — a bare '>' between two quoted paragraphs, say — must not consume
+        a slot or every later line shifts by one. A short or incomplete provider
+        response degrades to the original text instead of raising or writing None.
+        """
+        nonlocal t_idx
+        if not original:
+            return original
+        if t_idx >= len(translated_texts):
+            return original
+        value = translated_texts[t_idx]
+        t_idx += 1
+        return original if value is None else value
+
     for kind, prefix, original in parsed:
         if kind == "blank":
             out.append("")
@@ -113,23 +130,17 @@ def rebuild_markdown_from_translations(
         elif kind == "table_sep":
             out.append(prefix)
         elif kind == "heading":
-            out.append(f"{prefix} {translated_texts[t_idx]}")
-            t_idx += 1
+            out.append(f"{prefix} {_next(original)}")
         elif kind == "blockquote":
-            out.append(f"{prefix}{translated_texts[t_idx]}")
-            t_idx += 1
+            out.append(f"{prefix}{_next(original)}")
         elif kind == "bullet":
-            out.append(f"{prefix}- {translated_texts[t_idx]}")
-            t_idx += 1
+            out.append(f"{prefix}- {_next(original)}")
         elif kind == "number":
-            out.append(f"{prefix} {translated_texts[t_idx]}")
-            t_idx += 1
+            out.append(f"{prefix} {_next(original)}")
         elif kind == "table_row":
-            out.append(translated_texts[t_idx])
-            t_idx += 1
+            out.append(_next(original))
         elif kind == "body":
             # prefix is "  " when original line had a markdown hard line-break
-            out.append(translated_texts[t_idx] + prefix)
-            t_idx += 1
+            out.append(_next(original) + prefix)
 
     return out
