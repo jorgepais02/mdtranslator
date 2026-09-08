@@ -40,10 +40,26 @@ class GoogleDocsManager:
     resuelven el mismo numero.
     """
 
-    _folder_lock  = threading.Lock()
+    _locks_lock   = threading.Lock()
+    _locks:        dict[str, threading.Lock] = {}
     _folder_cache: dict[tuple[str, str], str] = {}
-    _name_lock    = threading.Lock()
+    _files_cache:  dict[str, list[dict]] = {}
     _reserved:     dict[str, set[str]] = {}
+
+    @classmethod
+    def _lock_for(cls, key: str) -> threading.Lock:
+        """Lock propio de una carpeta: dos carpetas distintas no deben esperarse."""
+        with cls._locks_lock:
+            return cls._locks.setdefault(key, threading.Lock())
+
+    @classmethod
+    def reset_run_state(cls) -> None:
+        """Olvida lo cacheado de la ejecucion anterior. El pipeline lo llama al arrancar."""
+        with cls._locks_lock:
+            cls._locks.clear()
+        cls._folder_cache.clear()
+        cls._files_cache.clear()
+        cls._reserved.clear()
 
     def __init__(self, credentials_path: str = 'secrets/credentials.json', token_path: str = 'secrets/token.json', console: Console | None = None, creds=None):
         self.credentials_path = credentials_path
@@ -109,7 +125,12 @@ class GoogleDocsManager:
 
     def get_or_create_subfolder(self, parent_id: str, folder_name: str) -> str:
         key = (parent_id, folder_name.strip().lower())
-        with GoogleDocsManager._folder_lock:
+        cached = GoogleDocsManager._folder_cache.get(key)
+        if cached:
+            return cached
+        # Un lock por carpeta: sin esto, dos idiomas que crean carpetas distintas se
+        # esperaban el uno al otro durante una llamada de red entera.
+        with GoogleDocsManager._lock_for(f"folder:{key}"):
             cached = GoogleDocsManager._folder_cache.get(key)
             if cached:
                 return cached
@@ -162,8 +183,20 @@ class GoogleDocsManager:
                 break
         return files
 
-    def _list_file_names(self, folder_id: str) -> list[str]:
-        return [f['name'] for f in self._list_files(folder_id)]
+    def _cached_files(self, folder_id: str) -> list[dict]:
+        """Listado de la carpeta, leido una sola vez por ejecucion.
+
+        Se llamaba a la API dos veces por documento —una para buscar el que se
+        reemplaza y otra para calcular el numero— y ademas con un lock global, asi que
+        40 subidas eran 80 peticiones estrictamente en fila. Lo que esta ejecucion crea
+        no hace falta releerlo: los nombres nuevos viven en _reserved y una
+        actualizacion en sitio no cambia el nombre de nada.
+        """
+        cached = GoogleDocsManager._files_cache.get(folder_id)
+        if cached is None:
+            cached = self._list_files(folder_id)
+            GoogleDocsManager._files_cache[folder_id] = cached
+        return cached
 
     def list_subfolders(self, parent_id: str) -> list[dict]:
         """Subcarpetas directas de parent_id, ordenadas por nombre. API: [{id, name}]."""
@@ -209,7 +242,7 @@ class GoogleDocsManager:
 
     def _find_next_number(self, folder_id: str, pattern: str | None,
                           extra_used: set[str] | None = None) -> int:
-        names = self._list_file_names(folder_id) + sorted(extra_used or ())
+        names = [f['name'] for f in self._cached_files(folder_id)] + sorted(extra_used or ())
         if not names:
             return 1
         # Se cuentan los que casan con el patron actual y, ademas, cualquier nombre que
@@ -238,47 +271,72 @@ class GoogleDocsManager:
         lang_folder_name = names.get(lang.lower(), lang.upper())
         return self.get_or_create_subfolder(folder_id, lang_folder_name)
 
+    @staticmethod
+    def _effective_pattern(pattern: str | None, disambiguate_lang: bool) -> str | None:
+        """Anade {lang} al patron cuando varios idiomas comparten carpeta.
+
+        Sin esto, con organize_by_language en false los cuatro idiomas del mismo
+        documento resolvian al mismo nombre y, con replace_existing, se sobrescribian
+        entre ellos: cuatro traducciones y un solo documento en Drive.
+        """
+        if pattern and disambiguate_lang and '{lang}' not in pattern:
+            return pattern + ' ({lang})'
+        return pattern
+
+    @staticmethod
+    def _plain_name(title: str, lang: str, disambiguate_lang: bool) -> str:
+        return f"{title} ({lang.upper()})" if disambiguate_lang else title
+
     def resolve_filename(self, title: str, folder_id: str, lang: str, sequential_naming: bool = False,
-                         sequential_naming_pattern: str | None = None) -> str:
+                         sequential_naming_pattern: str | None = None,
+                         disambiguate_lang: bool = False) -> str:
         # La reserva se hace bajo lock: Drive todavia no conoce los nombres que otros
         # hilos estan subiendo en este mismo instante.
-        with GoogleDocsManager._name_lock:
-            return self._reserve_name(title, folder_id, lang,
-                                      sequential_naming, sequential_naming_pattern)
+        pattern = self._effective_pattern(sequential_naming_pattern, disambiguate_lang)
+        with GoogleDocsManager._lock_for(folder_id):
+            return self._reserve_name(title, folder_id, lang, sequential_naming,
+                                      pattern, disambiguate_lang)
 
     def resolve_target(self, title: str, folder_id: str, lang: str,
                        sequential_naming: bool = False,
                        sequential_naming_pattern: str | None = None,
-                       replace_existing: bool = False) -> tuple[str, str | None]:
+                       replace_existing: bool = False,
+                       disambiguate_lang: bool = False) -> tuple[str, str | None]:
         """Nombre de destino y, si procede, id del documento que debe reemplazarse.
 
         Con replace_existing, un documento anterior del mismo titulo se actualiza en
         sitio: conserva enlace, comentarios e historial de versiones, y la carpeta no
-        se llena de duplicados en cada pasada. Devuelve (nombre, file_id | None).
+        se llena de duplicados en cada pasada. Con disambiguate_lang, el idioma entra
+        en el nombre porque la carpeta es compartida. Devuelve (nombre, file_id | None).
         """
-        with GoogleDocsManager._name_lock:
+        pattern = self._effective_pattern(sequential_naming_pattern, disambiguate_lang)
+        with GoogleDocsManager._lock_for(folder_id):
             if replace_existing:
-                if sequential_naming and sequential_naming_pattern:
-                    rx = self._pattern_to_regex(sequential_naming_pattern, title=title, lang=lang)
+                if sequential_naming and pattern:
+                    rx = self._pattern_to_regex(pattern, title=title, lang=lang)
                     match = lambda n: rx.match(n) is not None
                 else:
-                    match = lambda n: n == title
-                for f in self._list_files(folder_id):
+                    plain = self._plain_name(title, lang, disambiguate_lang)
+                    match = lambda n: n == plain
+                # Ordenado por nombre: si el mismo titulo aparece dos veces, se reemplaza
+                # siempre el mismo y no el que Drive devuelva primero esta vez.
+                for f in sorted(self._cached_files(folder_id), key=lambda f: f['name']):
                     if match(f['name']):
                         return f['name'], f['id']
 
-            name = self._reserve_name(title, folder_id, lang,
-                                      sequential_naming, sequential_naming_pattern)
+            name = self._reserve_name(title, folder_id, lang, sequential_naming,
+                                      pattern, disambiguate_lang)
             return name, None
 
     def _reserve_name(self, title: str, folder_id: str, lang: str,
-                      sequential_naming: bool, sequential_naming_pattern: str | None) -> str:
+                      sequential_naming: bool, pattern: str | None,
+                      disambiguate_lang: bool = False) -> str:
         if not sequential_naming:
-            return title
+            return self._plain_name(title, lang, disambiguate_lang)
         taken    = GoogleDocsManager._reserved.setdefault(folder_id, set())
-        next_num = str(self._find_next_number(folder_id, sequential_naming_pattern, taken))
-        if sequential_naming_pattern:
-            doc_name = sequential_naming_pattern.replace("{n}", next_num)
+        next_num = str(self._find_next_number(folder_id, pattern, taken))
+        if pattern:
+            doc_name = pattern.replace("{n}", next_num)
             doc_name = doc_name.replace("{title}", title)
             doc_name = doc_name.replace("{lang}", lang.upper())
         else:

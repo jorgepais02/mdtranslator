@@ -4,6 +4,8 @@ FakeDrive sustituye las dos únicas llamadas de red que usa la lógica de nombre
 """
 
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -25,18 +27,14 @@ class FakeDrive(GoogleDocsManager):
             time.sleep(self._delay)
         return [dict(f) for f in self._files]
 
-    def _list_file_names(self, folder_id):
-        return [f["name"] for f in self._list_files(folder_id)]
-
 
 @pytest.fixture(autouse=True)
 def _estado_limpio():
-    # El estado de reservas es de clase: sin limpiarlo un test contamina al siguiente.
-    GoogleDocsManager._reserved.clear()
-    GoogleDocsManager._folder_cache.clear()
+    # Reservas, locks y listados cacheados son de clase: sin limpiarlos un test
+    # contamina al siguiente, igual que una ejecución contaminaría a la siguiente.
+    GoogleDocsManager.reset_run_state()
     yield
-    GoogleDocsManager._reserved.clear()
-    GoogleDocsManager._folder_cache.clear()
+    GoogleDocsManager.reset_run_state()
 
 
 def _nombres(n):
@@ -150,16 +148,105 @@ def test_hilos_simultaneos_no_resuelven_el_mismo_numero():
     assert numeros == [12, 13, 14]
 
 
-@pytest.mark.xfail(reason="defecto conocido: con organize_by_language=false los idiomas "
-                          "comparten carpeta y el patrón por defecto no lleva {lang}, "
-                          "así que los cuatro resuelven al mismo documento",
-                   strict=True)
-def test_idiomas_distintos_no_deben_compartir_documento_en_carpeta_comun():
-    g = FakeDrive([{"id": "docA", "name": "1. apuntes"}])
-    ids = set()
+# ── carpeta compartida entre idiomas ──────────────────────────────────────────
+
+def test_en_carpeta_comun_cada_idioma_tiene_su_documento():
+    # Sin desambiguar, los cuatro idiomas resolvían al mismo id y se sobrescribían:
+    # cuatro traducciones y un solo documento en Drive, ganando el último hilo.
+    g = FakeDrive([{"id": "docA", "name": "1. apuntes (EN)"}])
+    nombres = []
     for lang in ("EN", "FR", "AR", "ZH"):
-        _, prev = g.resolve_target("apuntes", "F", lang, sequential_naming=True,
+        name, _ = g.resolve_target("apuntes", "F", lang, sequential_naming=True,
                                    sequential_naming_pattern="{n}. {title}",
-                                   replace_existing=True)
-        ids.add(prev)
-    assert len(ids) == 4, "cada idioma debería tener su propio documento"
+                                   replace_existing=True, disambiguate_lang=True)
+        nombres.append(name)
+    assert len(set(nombres)) == 4
+    assert nombres[0] == "1. apuntes (EN)"          # el que ya existía se reemplaza
+    assert all(l in n for n, l in zip(nombres, ("EN", "FR", "AR", "ZH")))
+
+
+def test_con_carpeta_por_idioma_el_nombre_no_cambia():
+    # organize_by_language=true: cada idioma ya está aislado, nada que desambiguar.
+    g = FakeDrive(_nombres(11))
+    name, _ = g.resolve_target("apuntes", "F", "fr", sequential_naming=True,
+                               sequential_naming_pattern="{n}. {title}",
+                               disambiguate_lang=False)
+    assert name == "12. apuntes"
+
+
+def test_un_patron_que_ya_lleva_lang_no_se_toca():
+    assert GoogleDocsManager._effective_pattern("{n}. {title} [{lang}]", True) == \
+        "{n}. {title} [{lang}]"
+
+
+def test_sin_numeracion_el_idioma_tambien_desambigua():
+    g = FakeDrive([])
+    assert g.resolve_target("apuntes", "F", "fr", disambiguate_lang=True) == \
+        ("apuntes (FR)", None)
+
+
+def test_en_carpeta_comun_los_numeros_no_se_repiten():
+    g = FakeDrive([])
+    nombres = [g.resolve_target("apuntes", "F", l, sequential_naming=True,
+                                sequential_naming_pattern="{n}. {title}",
+                                disambiguate_lang=True)[0]
+               for l in ("EN", "FR", "AR")]
+    assert [n.split(".")[0] for n in nombres] == ["1", "2", "3"]
+
+
+# ── un listado por carpeta y por ejecución ────────────────────────────────────
+
+def test_la_carpeta_se_lista_una_sola_vez():
+    # Eran dos llamadas de red por documento: una para buscar el que se reemplaza y
+    # otra para calcular el número.
+    g = FakeDrive(_nombres(5))
+    for i in range(10):
+        g.resolve_target(f"doc{i}", "F", "en", sequential_naming=True,
+                         sequential_naming_pattern="{n}. {title}",
+                         replace_existing=True)
+    assert g.listados == 1
+
+
+def test_cada_carpeta_se_lista_por_separado():
+    g = FakeDrive(_nombres(5))
+    for carpeta in ("F1", "F2", "F3"):
+        g.resolve_target("apuntes", carpeta, "en", sequential_naming=True,
+                         sequential_naming_pattern="{n}. {title}")
+    assert g.listados == 3
+
+
+def test_el_cache_no_sobrevive_a_la_ejecucion():
+    g = FakeDrive(_nombres(5))
+    g.resolve_target("a", "F", "en", sequential_naming=True,
+                     sequential_naming_pattern="{n}. {title}")
+    GoogleDocsManager.reset_run_state()
+    g.resolve_target("b", "F", "en", sequential_naming=True,
+                     sequential_naming_pattern="{n}. {title}")
+    assert g.listados == 2
+
+
+def test_carpetas_distintas_no_se_bloquean_entre_si():
+    # Con un lock global, resolver en cuatro carpetas costaba cuatro latencias en fila.
+    g = FakeDrive(_nombres(3), delay=0.20)
+    t = time.monotonic()
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        list(ex.map(lambda i: g.resolve_target(f"doc{i}", f"F{i}", "en",
+                                               sequential_naming=True,
+                                               sequential_naming_pattern="{n}. {title}"),
+                    range(4)))
+    assert time.monotonic() - t < 0.20 * 4 * 0.75
+
+
+def test_el_documento_reemplazado_es_siempre_el_mismo_con_titulos_duplicados():
+    # Drive no garantiza el orden del listado: sin ordenar, cada pasada podía
+    # reemplazar un documento distinto.
+    carpeta = [{"id": "b", "name": "7. apuntes"}, {"id": "a", "name": "3. apuntes"}]
+    elegidos = set()
+    for _ in range(3):
+        GoogleDocsManager.reset_run_state()
+        carpeta.reverse()
+        _, prev = FakeDrive(carpeta).resolve_target(
+            "apuntes", "F", "en", sequential_naming=True,
+            sequential_naming_pattern="{n}. {title}", replace_existing=True)
+        elegidos.add(prev)
+    assert elegidos == {"a"}

@@ -302,9 +302,13 @@ def run_pipeline(config: dict) -> list[dict]:
     if not docs:
         return all_results
 
-    translator   = get_translator(provider)
+    translator = get_translator(provider)
     # Authenticate once; each thread builds its own service objects from shared creds
-    shared_creds = GoogleDocsManager(console=console).creds if use_google else None
+    if use_google:
+        GoogleDocsManager.reset_run_state()   # los listados cacheados son de esta ejecución
+        shared_creds = GoogleDocsManager(console=console).creds
+    else:
+        shared_creds = None
 
     # ── Phase 1 — build the flat task list ────────────────────────────────────
     # A task is one (document, language) output. The source-language document is a
@@ -439,7 +443,10 @@ def run_pipeline(config: dict) -> list[dict]:
                         title=doc.stem, folder_id=tgt, lang=short,
                         sequential_naming=drive_cfg.get("sequential_naming", False),
                         sequential_naming_pattern=drive_cfg.get("sequential_naming_pattern"),
-                        replace_existing=drive_cfg.get("replace_existing", False))
+                        replace_existing=drive_cfg.get("replace_existing", False),
+                        # Sin carpeta por idioma todos comparten destino: el nombre tiene
+                        # que llevar el idioma o los cuatro apuntan al mismo documento.
+                        disambiguate_lang=not drive_cfg.get("organize_by_language"))
                     doc_id = g_manager.upload_docx(docx_file, tgt, filename=name, file_id=prev)
                     url = g_manager.get_document_url(doc_id)
 
