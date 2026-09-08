@@ -132,9 +132,21 @@ def _run(args):
     _ensure_drive_folder(config, interactive=not (args.json or args.yes))
 
     # Stage 2 — Confirmation
+    # "Change something…" reabre el wizard con lo ya contestado puesto, en vez de
+    # obligar a cancelar y empezar de cero por un idioma mal elegido.
     if not args.yes and not args.json:
-        if not show_confirmation(config):
-            _abort()
+        while True:
+            respuesta = show_confirmation(config)
+            if respuesta == "yes":
+                break
+            if respuesta != "back":
+                _abort()
+            nueva = run_wizard(args.file, previo=config)
+            if nueva is None:
+                _abort()
+            config = nueva
+            config["provider"] = _PROVIDER_MAP.get(config["provider"], config["provider"])
+            _ensure_drive_folder(config, interactive=True)
 
     # Stage 3 — Pipeline
     if not args.json:

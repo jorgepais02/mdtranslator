@@ -2,6 +2,7 @@ import os
 import time
 import requests
 from .base import BaseTranslator, TranslationError, chunk_texts
+from .langs import PROVIDER_CODES, SUPPORTED
 
 _MAX_RETRIES = 4
 _BASE_DELAY  = 1.0
@@ -11,6 +12,8 @@ class AzureTranslator(BaseTranslator):
     """Translator strategy using Azure AI Translator API."""
 
     name = "azure"
+    lang_codes = PROVIDER_CODES["azure"]
+    supported  = SUPPORTED["azure"]
 
     def __init__(self, api_key: str | None = None, region: str | None = None):
         self.api_key = api_key or os.getenv("AZURE_TRANSLATOR_KEY", "")
@@ -24,12 +27,9 @@ class AzureTranslator(BaseTranslator):
         # deja margen. Contar solo elementos dejaba pasar peticiones de 60.000.
         self.max_batch_chars = 45_000
 
-    def _map_lang_code(self, lang: str) -> str:
-        if lang.upper() == "EN-GB":
-            return "en-GB"
-        if lang.upper() == "ZH":
-            return "zh-Hans"
-        return lang.lower()
+    def api_lang(self, code: str) -> str:
+        """Como base, pero en minusculas: Azure espera los codigos en minuscula."""
+        return self.lang_codes.get(code.upper(), code.lower())
 
     def _post_with_retry(self, params: dict, payload: list, headers: dict) -> list:
         for attempt in range(_MAX_RETRIES):
@@ -69,9 +69,9 @@ class AzureTranslator(BaseTranslator):
         if self.region:
             headers["Ocp-Apim-Subscription-Region"] = self.region
 
-        params = {"api-version": "3.0", "to": [self._map_lang_code(target_lang)]}
+        params = {"api-version": "3.0", "to": [self.api_lang(target_lang)]}
         if source_lang:
-            params["from"] = self._map_lang_code(source_lang)
+            params["from"] = self.api_lang(source_lang)
 
         results = []
         for chunk in chunk_texts(texts, self.max_batch_size, self.max_batch_chars):

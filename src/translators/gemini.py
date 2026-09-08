@@ -1,5 +1,6 @@
 import os
 import re
+from .langs import PROVIDER_CODES, SUPPORTED
 from .base import BaseTranslator, TranslationError
 
 _NUM_PREFIX_RE = re.compile(r"^\d+\.\s*")
@@ -9,6 +10,8 @@ class GeminiTranslator(BaseTranslator):
     """Translator using Gemini (gemini-2.5-flash) with a technical translation prompt."""
 
     name = "gemini"
+    lang_codes = PROVIDER_CODES["gemini"]
+    supported  = SUPPORTED["gemini"]
     max_batch_size = 30
 
     _LANG_NAMES = {

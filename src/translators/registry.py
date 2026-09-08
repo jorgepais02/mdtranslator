@@ -25,6 +25,24 @@ def get_available_translators() -> list[dict]:
     return available
 
 
+def supported_by(code: str, provider_ids: list[str]) -> list[str]:
+    """De esos proveedores, cuales traducen a ese codigo. API: lista de ids.
+
+    Mira el atributo de clase, sin instanciar: saber quien cubre un idioma no deberia
+    exigir tener la clave. Un proveedor que no publica lista (supported = None) cuenta
+    como que si: es mejor intentarlo que negarselo al usuario por no saberlo.
+    """
+    cubren = []
+    for pid in provider_ids:
+        entrada = AVAILABLE_TRANSLATORS.get(pid)
+        if entrada is None:
+            continue
+        soportados = entrada[1].supported
+        if soportados is None or code.upper() in soportados:
+            cubren.append(pid)
+    return cubren
+
+
 def get_translator(fallback_order: list[str] | str) -> BaseTranslator:
     """Factory that returns a ProtectedTranslator wrapping a FallbackTranslator.
 

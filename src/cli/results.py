@@ -16,7 +16,8 @@ def _short_warning(msg: str) -> str:
         return "Gemini quota exceeded — text not refined"
     if "gemini_api_key" in lo or ("gemini" in lo and "api_key" in lo):
         return "Gemini API key not set — text not refined"
-    if "gemini" in lo and ("init failed" in lo or "unavailable" in lo):
+    if "gemini" in lo and ("init failed" in lo or "unavailable" in lo
+                           or "500" in msg or "503" in msg):
         return "Gemini unavailable — text not refined"
 
     # ── Translation failures ──────────────────────────────────────────
@@ -52,7 +53,10 @@ def _short_warning(msg: str) -> str:
         return "Google Drive request timed out — retry"
     if "auth" in lo and ("credential" in lo or "token" in lo or "google" in lo):
         return "Google Drive auth error — check credentials"
-    if "500" in msg or "503" in msg or "server error" in lo:
+    # Solo si de verdad viene de Google: un 503 de Gemini caia aqui y se anunciaba
+    # como un fallo de Drive en una ejecucion que ni siquiera subia nada.
+    if ("500" in msg or "503" in msg or "server error" in lo) \
+            and ("google" in lo or "drive" in lo):
         return "Google Drive server error — retry"
 
     # ── Generic timeout ───────────────────────────────────────────────

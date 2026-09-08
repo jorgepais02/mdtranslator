@@ -1,12 +1,26 @@
-import shutil
-import questionary
-from rich.panel import Panel
-from rich.table import Table
-from rich import box
-from .styles import console, clear_screen, WIZARD_STYLE, BLUE, DIM, FG, GREEN
+"""Ultima pantalla antes de arrancar: lo mismo que el resumen del wizard, y una salida.
+
+API:
+    show_confirmation(config) -> "yes" | "no" | "back"
+"""
+
+from rich.text import Text
+
+from .prompts import ask_select
+from .styles import (console, clear_screen, summary_grid, BRIGHT, CYAN, DIM, FG)
 
 _MAX_FILES = 8
 _MAX_LANGS = 8
+
+_SI     = "yes"
+_NO     = "no"
+_VOLVER = "back"
+
+_OPCIONES = [
+    ("Yes, start",       _SI),
+    ("Change something…", _VOLVER),
+    ("Cancel",           _NO),
+]
 
 
 def _resumir(langs: list[str]) -> str:
@@ -16,65 +30,47 @@ def _resumir(langs: list[str]) -> str:
     return "  ".join(langs[:_MAX_LANGS]) + f"  +{len(langs) - _MAX_LANGS}"
 
 
-def show_confirmation(config: dict) -> bool:
+def _filas(config: dict) -> list[tuple[str, Text]]:
+    filas: list[tuple[str, Text]] = []
+    files = config.get("files") or []
+
+    if len(files) > 1:
+        # Con muchas fuentes la lista entera se comia la pantalla.
+        visibles = files[:_MAX_FILES]
+        listado = "\n".join(visibles)
+        if len(files) > _MAX_FILES:
+            listado += f"\n… and {len(files) - _MAX_FILES} more"
+        filas.append((f"Files ({len(files)})", Text(listado, style=BRIGHT)))
+    else:
+        filas.append(("File", Text(files[0] if files else config["source"], style=BRIGHT)))
+
+    filas.append(("Provider", Text(config.get("provider_label") or config["provider"],
+                                   style=BRIGHT)))
+    filas.append(("Languages", Text(_resumir(config["languages"]), style=CYAN)))
+    filas.append(("Output", Text(config["output"], style=BRIGHT)))
+    if config.get("format_raw"):
+        filas.append(("Raw text", Text("format with Gemini", style=BRIGHT)))
+
+    total = Text()
+    total.append(f"{len(files) or 1}", style=BRIGHT)
+    total.append(" × ", style=DIM)
+    total.append(f"{len(config['languages'])}", style=BRIGHT)
+    total.append("  files × languages", style=DIM)
+    filas.append(("Work", total))
+    return filas
+
+
+def show_confirmation(config: dict) -> str:
+    """Ensena la configuracion y pregunta. API: 'yes' | 'no' | 'back'."""
     clear_screen()
     console.print()
+    console.print(f"[{FG}]Ready to run[/{FG}]")
+    console.print()
+    console.print(summary_grid(_filas(config)))
     console.print()
 
-    # Con key=14 y value min_width=20 mas el padding, en un terminal estrecho rich
-    # estrujaba la columna de valores hasta hacerla desaparecer: se veian las
-    # etiquetas sin un solo dato al lado. Y lo que sobrevivia se cortaba a mitad de
-    # palabra sin puntos suspensivos, con pinta de texto corrupto.
-    table = Table(show_header=False, show_edge=False, box=None, padding=(0, 2))
-    table.add_column("key",   style=DIM,  width=10, no_wrap=True)
-    # no_wrap: sin el, catorce idiomas se convertian en catorce lineas. Los saltos
-    # de linea explicitos de la lista de ficheros se siguen respetando.
-    table.add_column("value", style=FG,   overflow="ellipsis", no_wrap=True)
-
-    files = config.get("files") or []
-    if len(files) > 1:
-        # Con muchas fuentes la lista entera desbordaba el panel a lo alto.
-        visibles = files[:_MAX_FILES]
-        listado  = "\n".join(visibles)
-        if len(files) > _MAX_FILES:
-            listado += f"\n… y {len(files) - _MAX_FILES} más"
-        table.add_row(f"Files ({len(files)})", listado)
-    else:
-        table.add_row("File", files[0] if files else config["source"])
-    table.add_row("Provider",  config["provider"])
-    table.add_row("Languages", _resumir(config["languages"]))
-    table.add_row("Output",    config["output"])
-    if config.get("format_raw"):
-        table.add_row("Raw text", "format with Gemini")
-
-    # El suelo de 40 hacia que el panel se saliera en terminales mas estrechos que eso.
-    terminal_width = shutil.get_terminal_size().columns
-    panel_width = max(24, min(60, terminal_width - 2))
-
-    console.print(Panel(
-        table,
-        title=f"[bold {BLUE}]Configuration[/bold {BLUE}]",
-        title_align="left",
-        border_style=DIM,
-        box=box.ROUNDED,
-        padding=(1, 2),
-        width=panel_width,
-    ))
-
-    try:
-        proceed = questionary.select(
-            "Proceed?",
-            choices=["Yes", "No"],
-            style=WIZARD_STYLE,
-            erase_when_done=True,
-        ).ask()
-    except KeyboardInterrupt:
-        return False
-
-    if proceed == "Yes":
-        console.print(f"[{FG}]Proceed?[/{FG}]")
-        console.print(f"  [bold {GREEN}]❯ Yes[/bold {GREEN}]")
-        console.print(f"  [{DIM}]  No[/{DIM}]\n")
-        return True
-
-    return False
+    respuesta = ask_select("Proceed?",
+                           [{"name": n, "value": v} for n, v in _OPCIONES])
+    if respuesta is None:
+        return _NO
+    return respuesta

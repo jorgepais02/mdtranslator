@@ -1,9 +1,6 @@
-import io as _io
 from rich.live import Live
-from rich.console import Console as _Console, Group
-from rich.table import Table
+from rich.console import Group
 from rich.text import Text
-from rich import box
 import time
 import shutil
 import threading
@@ -12,7 +9,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from langdetect import detect_langs as _detect_langs, DetectorFactory as _LDF
 _LDF.seed = 0
-from .styles import (console, elide as _elide, GREEN, BLUE, YELLOW, CYAN, DIM,
+from .styles import (console, elide as _elide, status_style as _status_style,
+                     STATUS_QUEUED, GREEN, BLUE, YELLOW, RED, CYAN, DIM,
                      BRIGHT, FG, needs_refine)
 
 from translators import get_translator
@@ -33,10 +31,6 @@ _MIN_ROWS    = 3
 _MIN_WIDTH   = 32
 _MIN_BAR     = 12
 _MIN_NAME    = 10
-_SRC_COL     = 6
-# Regla para medir tablas: console.measure() viene recortado al ancho real de la
-# consola, asi que siempre respondia que si cabia. Esta no recorta nada.
-_RULER = _Console(file=_io.StringIO(), width=10_000)
 # Gemini free tier: por defecto una llamada cada vez. Subirlo arriesga un 429.
 DEFAULT_GEMINI_WORKERS = 1
 
@@ -55,13 +49,17 @@ def _ancho() -> int:
 def _bar(pct: float, ancho: int, style: str, sufijo: str = "") -> Text:
     """Barra de progreso del ancho que quepa. Estaba fija a 40 y se partia en dos."""
     lleno = int(round((pct / 100) * ancho))
+    # Una barra llena de una tarea que sigue en marcha se lee como terminada. Solo se
+    # llena del todo al 100% de verdad; el redondeo cede el ultimo bloque.
+    if pct < 100:
+        lleno = min(lleno, ancho - 1)
     return Text(" " + "█" * lleno + "░" * (ancho - lleno) + sufijo, style=style)
 
 
 def _cabecera(izquierda: str, languages: list[str], ancho: int) -> Text:
     """Titulo + idiomas, recortando los idiomas antes que dejarlos caer a la linea 2."""
     header = Text()
-    header.append(f" {izquierda}", style=FG)
+    header.append(f" {izquierda}", style=f"bold {BRIGHT}")
     header.append("  →  ", style=DIM)
     libre  = ancho - len(izquierda) - 7
     listado = "  ".join(languages)
@@ -97,221 +95,238 @@ def detect_source_language(texts: list[str]) -> tuple[str | None, str | None]:
     return best.lang, None
 
 
-class PipelineView:
-    def __init__(self, languages: list[str], source_file: str):
-        self.languages   = languages
-        self.source_file = source_file
-        self.lang_status = {l: {"status": "waiting", "time": None} for l in languages}
-        self.source_done = False
-        self.source_time = None
-        self.overall_pct = 0
-
-    def set_source_done(self, elapsed: float):
-        self.source_done = True
-        self.source_time = elapsed
-
-    def set_lang_status(self, lang: str, status: str, elapsed: float | None = None):
-        self.lang_status[lang] = {"status": status, "time": elapsed}
-
-    def set_progress(self, pct: int):
-        self.overall_pct = pct
-
-    def render(self) -> Group:
-        parts = []
-        ancho = _ancho()
-        barra = max(_MIN_BAR, min(40, ancho - 5))
-
-        # ── header ──────────────────────────────────────────────────────────
-        parts.append(_cabecera(self.source_file, self.languages, ancho))
-        parts.append(Text(f" {'─' * min(44, ancho - 2)}", style=DIM))
-        parts.append(Text())
-
-        # ── source bar ───────────────────────────────────────────────────────
-        src_label = Text()
-        src_label.append(" source", style=DIM)
-        if self.source_done:
-            src_label.append(f"   {self.source_time:.1f}s", style=DIM)
-        parts.append(src_label)
-
-        if self.source_done:
-            parts.append(_bar(100, barra - 3, GREEN, "  ✓"))
-        else:
-            parts.append(_bar(37.5, barra, BLUE))
-
-        parts.append(Text())
-        parts.append(Text())
-
-        # ── translation bar ──────────────────────────────────────────────────
-        trans_label = Text()
-        trans_label.append(" translating", style=DIM)
-        if self.overall_pct > 0:
-            trans_label.append(f"   {self.overall_pct}%", style=BRIGHT)
-        parts.append(trans_label)
-
-        parts.append(_bar(self.overall_pct, barra, BLUE))
-        parts.append(Text())
-
-        # ── per-language status ───────────────────────────────────────────────
-        for lang, info in self.lang_status.items():
-            status = info["status"] or "waiting"
-            line = Text()
-            line.append(f"   {lang:>3} ", style=CYAN)
-            if status.startswith("✓"):
-                line.append(status, style=GREEN)
-            elif status in ("translating…", "refining…", "uploading…"):
-                line.append(status, style=YELLOW)
-            elif status.startswith("✗"):
-                line.append(status, style="#dc3b3b")
-            else:
-                line.append(status, style=DIM)
-            if info["time"]:
-                line.append(f"   {info['time']:.1f}s", style=DIM)
-            parts.append(line)
-
-        return Group(*parts)
-
-
-# Compact cell glyphs for the multi-file grid, where a column is only a few chars wide.
-_CELL_GLYPHS = {
-    "translating…": ("tr", YELLOW),
-    "refining…":    ("rf", YELLOW),
-    "uploading…":   ("up", YELLOW),
-    "waiting":      ("·",  DIM),
+# Cuanto lleva hecho una tarea dentro de su fila. La barra no interpola contra un
+# reloj: se mueve en los momentos en que de verdad pasa algo, y se para si algo se
+# atasca —que es justamente lo que quieres ver.
+_FASES = {
+    "translating…": 0.30,
+    "refining…":    0.60,
+    "uploading…":   0.85,
 }
+# La barra tiene tope: estirada a 100 columnas deja de leerse como una barra y el
+# ojo pierde el salto entre lleno y vacio. Lo que sobra a la derecha se queda vacio.
+_MAX_BAR    = 28
+_TIEMPO_COL = 6
 
 
-class MultiFileView:
-    """Live grid for parallel runs: one row per source file, one column per language."""
+@dataclass
+class Track:
+    """Una fila de la vista: un idioma con un fichero, o un fichero con --all."""
+    key:      str
+    total:    int = 1                 # tareas que caen en esta fila
+    hechas:   int = 0
+    status:   str = STATUS_QUEUED
+    detail:   str = ""                # idioma en curso, cuando la fila es un fichero
+    started:  float | None = None
+    finished: float | None = None
+    fallos:   int = 0
 
-    def __init__(self, languages: list[str], stems: list[str], total_tasks: int):
-        self.languages   = languages
-        self.stems       = stems
-        self.total_tasks = total_tasks
-        self.completed   = 0
-        # cells[stem][column] — columns are the requested languages plus "SRC".
-        self.cells    = {s: {c: "waiting" for c in ["SRC", *languages]} for s in stems}
-        self.src_lang = {s: "—" for s in stems}
+    @property
+    def pct(self) -> float:
+        if self.hechas >= self.total:
+            return 100.0
+        return min(100.0, (self.hechas + _FASES.get(self.status, 0.0)) / self.total * 100)
 
-    def set_source_lang(self, stem: str, lang: str | None):
-        self.src_lang[stem] = lang or "—"
+    @property
+    def viva(self) -> bool:
+        return self.started is not None and self.finished is None
 
-    def set_status(self, stem: str, column: str, status: str, elapsed: float | None = None):
-        if stem in self.cells and column in self.cells[stem]:
-            self.cells[stem][column] = status
+    def elapsed(self, ahora: float) -> float | None:
+        """Segundos que lleva. Sigue contando mientras la fila esta viva."""
+        if self.started is None:
+            return None
+        return (self.finished or ahora) - self.started
 
-    def mark_completed(self):
+    def etiqueta(self) -> str:
+        """El estado como se lee. Sin glifo ni puntos suspensivos: el color ya dice
+        si fue bien y la barra ya dice que sigue en marcha."""
+        texto = self.status.lstrip("✓✗ ").rstrip("…") or STATUS_QUEUED
+        return f"{texto} {self.detail}".strip()
+
+
+class ProgressView:
+    """Una fila por pista, con su barra, su estado y su cronometro.
+
+    Con un fichero las pistas son sus idiomas; con --all son los ficheros. Antes eran
+    dos vistas distintas: esta y una rejilla fichero × idioma, con su modo compacto,
+    su recorte de columnas y su propio vocabulario de glifos. La rejilla se quito
+    porque no contestaba a nada que se pudiera hacer —ver que tema03 en arabe va por
+    la mitad no permite reordenar, ni cancelar esa celda, ni saltarse el fichero— y lo
+    unico que si contestaba, "¿se ha atascado algo?", cabe en la linea de resumen y en
+    que una barra deje de moverse.
+
+    API:
+        update(key, status, detail="")   cambia el estado de una fila
+        complete(key, ok=True)           una tarea de esa fila ha terminado
+        render()                         Group de rich para el Live
+    """
+
+    def __init__(self, header_left: str, languages: list[str],
+                 tracks: dict[str, int], *, show_langs: bool,
+                 prepare_time: float | None = None):
+        self.header_left  = header_left
+        self.languages    = languages
+        self.show_langs   = show_langs
+        self.prepare_time = prepare_time
+        self.tracks       = {k: Track(k, total=n) for k, n in tracks.items()}
+        self.total_tasks  = sum(tracks.values()) or 1
+        self.completed    = 0
+        self.failed       = 0
+        self.started      = time.monotonic()
+
+    # ── entradas ──────────────────────────────────────────────────────────────
+
+    def update(self, key: str, status: str, detail: str = "") -> None:
+        t = self.tracks.get(key)
+        if t is None:
+            return
+        if t.started is None:
+            t.started = time.monotonic()
+        t.status, t.detail = status, detail
+
+    def complete(self, key: str, ok: bool = True) -> None:
+        t = self.tracks.get(key)
         self.completed += 1
+        if not ok:
+            self.failed += 1
+        if t is None:
+            return
+        t.hechas += 1
+        if not ok:
+            t.fallos += 1
+        if t.hechas >= t.total:
+            t.finished = time.monotonic()
+            # El detalle es "en que idioma va": una fila terminada no va en ninguno,
+            # y dejarlo puesto la dejaba diciendo "generated FR" para siempre.
+            t.detail = ""
 
     @property
     def pct(self) -> int:
-        if not self.total_tasks:
-            return 100
         return int((self.completed / self.total_tasks) * 100)
 
-    def _cell(self, status: str) -> Text:
-        if status.startswith("✓"):
-            return Text("✓", style=GREEN)
-        if status.startswith("✗"):
-            return Text("✗", style="#dc3b3b")
-        glyph, style = _CELL_GLYPHS.get(status, ("·", DIM))
-        return Text(glyph, style=style)
+    # ── pintado ───────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _done(estado: str) -> bool:
-        return estado.startswith("✓") or estado.startswith("✗")
+    def _resumen(self) -> Text:
+        partes = []
+        if self.prepare_time is not None:
+            partes.append(f"parsed in {self.prepare_time:.1f}s")
+        if self.show_langs:
+            partes.append(f"{self.completed} of {self.total_tasks} documents")
+        else:
+            partes.append(f"{len(self.tracks)} languages")
+            partes.append(f"{self.completed} done")
+        vivas = sum(1 for t in self.tracks.values() if t.viva)
+        if vivas:
+            partes.append(f"{vivas} running")
+        if self.failed:
+            partes.append(f"{self.failed} failed")
+        # Se recorta en vez de envolver: una segunda linea de resumen empuja las filas
+        # hacia abajo y con --all la vista entera baila en cada refresco.
+        return Text(" " + _elide(" · ".join(partes), _ancho() - 2), style=DIM)
 
-    def visible_stems(self, alto: int | None = None) -> tuple[list[str], int]:
-        """Filas que caben en pantalla, y cuántas se ocultan. API: (stems, ocultas).
+    def visible_tracks(self, alto: int | None = None) -> tuple[list[Track], int]:
+        """Filas que caben a lo alto, y cuantas se ocultan. API: (tracks, ocultas).
 
-        Con --all sobre treinta ficheros la tabla se salía del terminal y arrastraba
-        la barra de progreso con ella. Se prioriza lo que está en marcha; lo terminado
-        cede el sitio, que para eso está la tabla de resultados del final.
+        Con --all sobre treinta ficheros la lista se salia del terminal y se llevaba
+        por delante la linea de resumen. Lo que esta en marcha tiene prioridad; lo
+        terminado cede el sitio, que para eso esta la tabla de resultados del final.
         """
         if alto is None:
             alto = shutil.get_terminal_size(fallback=(80, 24)).lines
         cupo = max(_MIN_ROWS, alto - _VIEW_CHROME)
-        if len(self.stems) <= cupo:
-            return self.stems, 0
+        todas = list(self.tracks.values())
+        if len(todas) <= cupo:
+            return todas, 0
+        orden = {t.key: i for i, t in enumerate(todas)}
+        activas = [t for t in todas if t.finished is None]
+        elegidas = (activas + [t for t in todas if t.finished is not None])[:cupo]
+        # En el orden original, no en el de prioridad: si las filas bailan de sitio en
+        # cada refresco no hay quien las lea.
+        return sorted(elegidas, key=lambda t: orden[t.key]), len(todas) - len(elegidas)
 
-        activos    = [s for s in self.stems
-                      if any(not self._done(e) for e in self.cells[s].values())]
-        terminados = [s for s in self.stems if s not in set(activos)]
-        elegidos   = (activos + terminados)[:cupo]
-        # Se muestran en el orden original, no en el de prioridad: si las filas bailan
-        # de sitio en cada refresco no hay quien lea la tabla.
-        orden = {s: i for i, s in enumerate(self.stems)}
-        return sorted(elegidos, key=orden.get), len(self.stems) - len(elegidos)
+    def _medidas(self, ancho: int) -> tuple[int, int, int, int]:
+        """Reparto horizontal: (nombre, barra, estado, ancho del bloque).
 
-    def _fila_compacta(self, stem: str, ancho_nombre: int) -> Text:
+        El bloque no ocupa todo el terminal: la barra tiene tope y el total de abajo
+        se alinea con la columna de tiempos, no con el borde derecho de la pantalla.
+        """
+        nombre = min(max((len(t.key) for t in self.tracks.values()), default=_MIN_NAME),
+                     max(_MIN_NAME, ancho // 3))
+        # "translating FR" es la etiqueta mas larga que se puede formar; sin detalle,
+        # "translating" a secas.
+        estado = 14 if self.show_langs else 11
+        fijo   = 2 + nombre + 1 + 1 + _TIEMPO_COL
+        barra  = min(_MAX_BAR, ancho - fijo - estado - 1)
+        if barra < _MIN_BAR:
+            # Antes de estrechar la barra hasta que deje de significar nada, se
+            # sacrifica el texto del estado: el color de la barra ya lo cuenta.
+            estado = max(0, ancho - fijo - _MIN_BAR - 1)
+            # Por debajo de seis columnas el estado ya no es una palabra sino un
+            # muñón ("ge…", "up…"): mejor quitarlo y que hable el color de la barra.
+            if estado < 6:
+                estado = 0
+            barra  = max(_MIN_BAR, min(_MAX_BAR, ancho - fijo - estado - 1))
+        return nombre, barra, estado, min(ancho, fijo + barra + estado)
+
+    def _fila(self, t: Track, ahora: float, nombre: int, barra: int, estado: int) -> Text:
+        estilo = _status_style(t.status)
         linea = Text()
-        linea.append(" " + _elide(stem, ancho_nombre).ljust(ancho_nombre), style=FG)
-        linea.append(f" {self.src_lang[stem]:<3}", style=DIM)
+        linea.append("  " + _elide(t.key, nombre).ljust(nombre), style=BRIGHT)
+        linea.append_text(_bar(t.pct, barra, estilo))
         linea.append(" ")
-        for lang in self.languages:
-            estado = self.cells[stem][lang]
-            if estado.startswith("✓"):
-                linea.append("✓", style=GREEN)
-            elif estado.startswith("✗"):
-                linea.append("✗", style="#dc3b3b")
-            elif estado == "waiting":
-                linea.append("·", style=DIM)
-            else:
-                linea.append("▸", style=YELLOW)
+        if estado:
+            # El detalle (el idioma en curso) es lo primero que se cae si no cabe:
+            # "uploading" entero dice mas que "uploading …".
+            texto = t.etiqueta()
+            if len(texto) > estado and t.detail:
+                texto = t.status.lstrip("✓✗ ").rstrip("…")
+            linea.append(_elide(texto, estado).ljust(estado), style=estilo)
+        segundos = t.elapsed(ahora)
+        linea.append(f"{segundos:.1f}s".rjust(_TIEMPO_COL) if segundos is not None
+                     else "—".rjust(_TIEMPO_COL), style=DIM)
         return linea
 
-    def _tabla(self, stems: list[str], ancho: int):
-        """Rejilla completa, o una fila compacta por fichero si no caben las columnas.
-
-        Con catorce idiomas rich estrechaba las columnas hasta hacerlas desaparecer:
-        se veía la lista de ficheros sin un solo estado al lado. Es preferible un
-        glifo por idioma que una tabla que miente.
-        """
-        # Calcular a mano cuánto ocupa la tabla no funcionaba: rich reparte el ancho
-        # con reglas propias y la mía se desviaba justo lo suficiente para que
-        # comprimiera las cabeceras. Se construye y se le pregunta a rich si cabe.
-        for hueco in (40, 28, 20, _MIN_NAME):
-            table = Table(show_edge=False, box=box.SIMPLE, padding=(0, 1), header_style=DIM)
-            table.add_column("FILE", style=FG, no_wrap=True, max_width=hueco)
-            table.add_column("SRC", justify="center", no_wrap=True, width=4)
-            for lang in self.languages:
-                table.add_column(lang, style=CYAN, justify="center", no_wrap=True, width=2)
-            for stem in stems:
-                src = Text()
-                src.append(f"{self.src_lang[stem]} ", style=DIM)
-                src.append_text(self._cell(self.cells[stem]["SRC"]))
-                table.add_row(Text(_elide(stem, hueco), style=FG), src,
-                              *(self._cell(self.cells[stem][l]) for l in self.languages))
-            if _RULER.measure(table).maximum <= ancho:
-                return table
-
-        hueco = max(_MIN_NAME, ancho - len(self.languages) - _SRC_COL - 2)
-        # Al ancho del nombre mas largo, no a todo el hueco sobrante: rellenar hasta
-        # el final dejaba un desierto entre el nombre y su estado.
-        ancho_nombre = min(hueco, max((len(s) for s in stems), default=_MIN_NAME))
-        return Group(*(self._fila_compacta(s, ancho_nombre) for s in stems))
-
     def render(self) -> Group:
-        parts = []
         ancho = _ancho()
-        barra = max(_MIN_BAR, min(40, ancho - 5))
+        ahora = time.monotonic()
+        nombre, barra, estado, bloque = self._medidas(ancho)
 
-        parts.append(_cabecera(f"{len(self.stems)} files", self.languages, ancho))
-        parts.append(Text(f" {'─' * min(44, ancho - 2)}", style=DIM))
-        parts.append(Text())
+        partes: list = []
+        if self.show_langs:
+            partes.append(_cabecera(self.header_left, self.languages, ancho))
+        else:
+            partes.append(Text(f" {_elide(self.header_left, ancho - 2)}",
+                               style=f"bold {BRIGHT}"))
+        partes.append(self._resumen())
+        partes.append(Text())
 
-        label = Text()
-        label.append(" translating", style=DIM)
-        label.append(f"   {self.pct}%", style=BRIGHT)
-        label.append(f"   {self.completed}/{self.total_tasks}", style=DIM)
-        parts.append(label)
-        parts.append(_bar(self.pct, barra, BLUE))
-        parts.append(Text())
-
-        stems, ocultas = self.visible_stems()
-        parts.append(self._tabla(stems, ancho))
+        visibles, ocultas = self.visible_tracks()
+        for t in visibles:
+            partes.append(self._fila(t, ahora, nombre, barra, estado))
         if ocultas:
-            parts.append(Text(f"   … y {ocultas} fichero(s) más", style=DIM))
-        return Group(*parts)
+            partes.append(Text(f"  … and {ocultas} more", style=DIM))
+
+        partes.append(Text())
+        total = Text()
+        total.append("total".rjust(max(0, bloque - _TIEMPO_COL - 1)), style=DIM)
+        total.append(f"{ahora - self.started:.1f}s".rjust(_TIEMPO_COL + 1), style=DIM)
+        partes.append(total)
+        return Group(*partes)
+
+
+class _Vivo:
+    """Renderable que vuelve a preguntarle a la vista en cada refresco del Live.
+
+    Pasandole un Group ya construido, el Live redibujaba siempre el mismo: los
+    cronometros solo avanzaban cuando una tarea cambiaba de estado, y una fila que se
+    quedaba diez segundos subiendo parecia congelada.
+    """
+
+    def __init__(self, view):
+        self.view = view
+
+    def __rich__(self):
+        return self.view.render()
 
 
 def _local_stem(title: str, lang: str) -> str:
@@ -449,14 +464,23 @@ def run_pipeline(config: dict) -> list[dict]:
                 continue
             tasks.append((doc, lang, False))
 
+    # Las filas de la vista, en el orden en que se leen: los idiomas cuando hay un
+    # fichero, los ficheros cuando hay varios. Se calcula antes de reordenar las
+    # tareas, porque el orden de ejecucion y el de lectura no tienen por que coincidir.
+    single = len(docs) == 1
+    filas: dict[str, int] = {}
+    for _doc, _lang, _is_src in tasks:
+        clave = _lang if single else _doc.stem
+        filas[clave] = filas.get(clave, 0) + 1
+
     # Las tareas que pasan por Gemini van primero. El refinamiento está serializado por
     # cuota, así que si AR y ZH salen las últimas los demás hilos acaban parados
     # esperándolas; lanzándolas antes, EN y FR se solapan con su cola.
     tasks.sort(key=lambda t: not needs_refine(t[1]))
 
-    single      = len(docs) == 1
-    view        = (PipelineView(languages, docs[0].path.name) if single
-                   else MultiFileView(languages, [d.stem for d in docs], len(tasks)))
+    view = ProgressView(docs[0].path.name if single else f"{len(docs)} files",
+                        languages, filas, show_langs=not single,
+                        prepare_time=prepare_elapsed)
     view_lock   = threading.Lock()
     used_folders: set[Path] = set()
     scratch:     set[Path] = set()        # ficheros creados aquí, borrables si no_local
@@ -464,41 +488,22 @@ def run_pipeline(config: dict) -> list[dict]:
     cancelled    = threading.Event()      # Ctrl+C: corta las tareas que aún no han salido
     in_flight    = 0                      # tareas que ya no se pueden cancelar
     pdf_jobs: list[tuple[Path, str, str]] = []   # (docx, fichero fuente, idioma)
-    completed    = 0
-
-    if single:
-        view.set_source_done(prepare_elapsed)
-    else:
-        for doc in docs:
-            view.set_source_lang(doc.stem, doc.src_lang)
 
     console.print()
     console.print()
 
-    with Live(view.render(), console=console, refresh_per_second=4) as live:
+    with Live(_Vivo(view), console=console, refresh_per_second=4) as live:
 
         def _update(doc: SourceDoc, lang: str, is_source: bool,
                     status: str, elapsed: float | None = None) -> None:
             with view_lock:
-                if single:
-                    if lang in view.lang_status:
-                        view.set_lang_status(lang, status, elapsed)
-                else:
-                    view.set_status(doc.stem, "SRC" if is_source else lang, status, elapsed)
-                    # The source language doubles as a requested target when both match.
-                    if is_source and lang in view.cells[doc.stem]:
-                        view.set_status(doc.stem, lang, status, elapsed)
-                live.update(view.render())
+                view.update(lang if single else doc.stem, status, "" if single else lang)
+                live.refresh()
 
-        def _bump_progress() -> None:
-            nonlocal completed
+        def _bump_progress(doc: SourceDoc, lang: str, ok: bool = True) -> None:
             with view_lock:
-                completed += 1
-                if single:
-                    view.set_progress(int((completed / len(tasks)) * 100))
-                else:
-                    view.mark_completed()
-                live.update(view.render())
+                view.complete(lang if single else doc.stem, ok)
+                live.refresh()
 
         def _run_task(doc: SourceDoc, lang: str, is_source: bool) -> dict:
             nonlocal in_flight
@@ -511,6 +516,7 @@ def run_pipeline(config: dict) -> list[dict]:
 
             t_lang  = time.monotonic()
             ok      = True
+            refined = True
             url     = None
             warning = doc.warning if is_source else None
 
@@ -537,7 +543,7 @@ def run_pipeline(config: dict) -> list[dict]:
                             rebuilt, refine_warn = refine_markdown(rebuilt, lang)
                         if refine_warn:
                             warning = refine_warn
-                            _update(doc, lang, is_source, "✓ unrefined")
+                            refined = False
 
                     new_content = "\n".join(rebuilt) + "\n"
 
@@ -590,7 +596,7 @@ def run_pipeline(config: dict) -> list[dict]:
 
             except KeyboardInterrupt:
                 _update(doc, lang, is_source, "✗ cancelled")
-                _bump_progress()
+                _bump_progress(doc, lang, ok=False)
                 return {"lang": lang, "source": doc.path.name, "file": "—", "ok": False,
                         "time": time.monotonic() - t_lang, "gdocs_url": None,
                         "warning": "cancelled"}
@@ -608,8 +614,11 @@ def run_pipeline(config: dict) -> list[dict]:
 
             elapsed = time.monotonic() - t_lang
             if ok:
-                _update(doc, lang, is_source, "✓ generated", elapsed)
-            _bump_progress()
+                # "unrefined" se marcaba antes de subir y luego lo pisaba "generated":
+                # el documento salia sin refinar y la vista decia que todo bien.
+                _update(doc, lang, is_source,
+                        "✓ generated" if refined else "✓ unrefined", elapsed)
+            _bump_progress(doc, lang, ok)
 
             return {
                 "lang":      lang,

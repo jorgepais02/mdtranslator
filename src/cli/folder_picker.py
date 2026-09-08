@@ -16,7 +16,8 @@ from pathlib import Path
 
 import questionary
 
-from .styles import console, elide, WIZARD_STYLE, GREEN, DIM, FG
+from .prompts import ask_select, ask_text
+from .styles import console, elide, BRIGHT, CYAN, DIM, FG, GREEN
 
 from core.config import PROJECT_ROOT
 
@@ -25,10 +26,17 @@ ROOT = "root"
 _URL_ID_RE = re.compile(r"/folders/([A-Za-z0-9_-]{10,})|[?&]id=([A-Za-z0-9_-]{10,})")
 _BARE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,}$")
 
-_USE    = "✓  Usar esta carpeta"
-_UP     = "↑  Subir un nivel"
-_PASTE  = "🔗  Pegar una URL de Drive"
-_CANCEL = "✗  Cancelar"
+# Sin emoji: 📁 ocupa dos celdas del terminal y ✓ una, asi que los nombres de las
+# carpetas nunca quedaban alineados entre si. El sufijo "/" distingue igual de bien
+# una carpeta y no rompe la cuadricula.
+_USE    = "Usar esta carpeta"
+_UP     = "Subir un nivel"
+_PASTE  = "Pegar una URL de Drive"
+_CANCEL = "Cancelar"
+
+
+def _plural(n: int, singular: str, plural: str) -> str:
+    return f"{n} {singular if n == 1 else plural}"
 
 
 def extract_folder_id(text: str) -> str | None:
@@ -69,7 +77,9 @@ def pick_drive_folder(manager=None) -> str | None:
     g = manager or GoogleDocsManager(console=console)
 
     current, label = ROOT, "Mi unidad"
+    camino: list[str] = [label]          # migas de pan: donde estas, no solo el nombre
     while True:
+        ruta = " / ".join(camino)
         try:
             subs = g.list_subfolders(current)
         except Exception as e:
@@ -79,22 +89,21 @@ def pick_drive_folder(manager=None) -> str | None:
         # El nombre se recorta: questionary parte en dos lineas las opciones largas
         # y la carpeta seleccionada deja de leerse de un vistazo.
         cabe = max(16, console.width - 8)
-        by_label = {f"📁  {elide(f['name'], cabe)}": f for f in subs}
-        choices = [_USE, *by_label]
+        by_label = {f"{elide(f['name'], cabe)}/": f for f in subs}
+
+        # Navegar arriba, decidir abajo, con una raya en medio: sin ella "Usar esta
+        # carpeta" era una entrada mas de la lista de carpetas y se elegia sin querer.
+        choices = list(by_label)
         if current != ROOT:
             choices.append(_UP)
-        choices += [_PASTE, _CANCEL]
+        choices.append(questionary.Separator("  " + "─" * min(30, max(10, console.width - 6))))
+        choices += [_USE, _PASTE, _CANCEL]
 
-        console.print(f"\n[{DIM}]Carpeta actual:[/{DIM}] "
-                      f"[{FG}]{elide(label, max(16, console.width - 28))}[/{FG}]"
-                      f"  [{DIM}]({len(subs)} subcarpeta(s))[/{DIM}]")
+        console.print(f"\n[{DIM}]En:[/{DIM}] "
+                      f"[{BRIGHT}]{elide(ruta, max(16, console.width - 28))}[/{BRIGHT}]"
+                      f"  [{DIM}]{_plural(len(subs), 'subcarpeta', 'subcarpetas')}[/{DIM}]")
 
-        answer = _ask(lambda: questionary.select(
-            "Elige la carpeta de destino",
-            choices=choices,
-            style=WIZARD_STYLE,
-            erase_when_done=True,
-        ).ask())
+        answer = ask_select("Elige la carpeta de destino", choices)
 
         if answer is None or answer == _CANCEL:
             return None
@@ -102,21 +111,19 @@ def pick_drive_folder(manager=None) -> str | None:
         if answer == _USE:
             if current == ROOT:
                 current = g.get_folder_info(ROOT)["id"]  # id real de "Mi unidad"
-            console.print(f"[{GREEN}]✓ Carpeta seleccionada:[/{GREEN}] "
-                          f"[{FG}]{elide(label, max(16, console.width - 26))}[/{FG}]")
+            console.print(f"[{GREEN}]✓[/{GREEN}] [{DIM}]Carpeta seleccionada:[/{DIM}] "
+                          f"[{BRIGHT}]{elide(ruta, max(16, console.width - 26))}[/{BRIGHT}]")
             return current
 
         if answer == _UP:
             parents = g.get_folder_info(current).get("parents") or [ROOT]
             current = parents[0]
             label = g.get_folder_info(current)["name"] if current != ROOT else "Mi unidad"
+            camino = camino[:-1] or [label]
             continue
 
         if answer == _PASTE:
-            pasted = _ask(lambda: questionary.text(
-                "Pega la URL (o el ID) de la carpeta",
-                style=WIZARD_STYLE,
-            ).ask())
+            pasted = ask_text("Pega la URL (o el ID) de la carpeta")
             folder_id = extract_folder_id(pasted or "")
             if not folder_id:
                 console.print("[yellow]⚠ No he reconocido ninguna carpeta en eso.[/yellow]")
@@ -126,12 +133,13 @@ def pick_drive_folder(manager=None) -> str | None:
             except Exception as e:
                 console.print(f"[red]✗ No puedo acceder a esa carpeta: {e}[/red]")
                 continue
-            console.print(f"[{GREEN}]✓ Carpeta seleccionada:[/{GREEN}] "
-                          f"[{FG}]{elide(info['name'], max(16, console.width - 26))}[/{FG}]")
+            console.print(f"[{GREEN}]✓[/{GREEN}] [{DIM}]Carpeta seleccionada:[/{DIM}] "
+                          f"[{BRIGHT}]{elide(info['name'], max(16, console.width - 26))}[/{BRIGHT}]")
             return info["id"]
 
         entry = by_label[answer]
         current, label = entry["id"], entry["name"]
+        camino.append(label)
 
 
 def run_set_folder() -> int:

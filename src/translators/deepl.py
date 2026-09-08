@@ -2,6 +2,7 @@ import os
 import time
 import requests
 from .base import BaseTranslator, TranslationError, chunk_texts
+from .langs import PROVIDER_CODES, SUPPORTED
 
 _MAX_RETRIES = 3
 _BASE_DELAY  = 1.0
@@ -11,6 +12,8 @@ class DeepLTranslator(BaseTranslator):
     """Translator strategy using DeepL API."""
 
     name = "deepl"
+    lang_codes = PROVIDER_CODES["deepl"]
+    supported  = SUPPORTED["deepl"]
 
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.getenv("DEEPL_API_KEY", "")
@@ -63,7 +66,9 @@ class DeepLTranslator(BaseTranslator):
         results: list[str] = []
 
         for chunk in chunk_texts(texts, self.max_batch_size, self.max_batch_chars):
-            payload = {"text": chunk, "target_lang": target_lang}
+            # api_lang, no target_lang a pelo: DeepL ya no admite EN ni PT como
+            # destino salvo por compatibilidad. Ver translators/langs.py.
+            payload = {"text": chunk, "target_lang": self.api_lang(target_lang)}
             if source_lang:
                 payload["source_lang"] = source_lang.split("-")[0].upper()
             results.extend(self._post_with_retry(payload, headers))

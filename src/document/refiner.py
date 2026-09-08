@@ -174,7 +174,9 @@ def refine_markdown(lines: list[str], lang_code: str) -> tuple[list[str], str | 
             if warn:
                 return lines, warn
     except Exception as e:
-        return lines, str(e)
+        # Con el mensaje pelado, un 503 de Gemini llegaba a la tabla final como
+        # "Google Drive server error": el aviso tiene que decir de donde viene.
+        return lines, f"Gemini: {e}"
 
     for pos, idx in enumerate(idxs):
         n = nodes[idx]

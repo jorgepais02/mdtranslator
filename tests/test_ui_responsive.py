@@ -4,14 +4,15 @@ import io
 
 import pytest
 from rich.console import Console
-from rich.table import Table
 
 from cli import pipeline
-from cli.pipeline import MultiFileView, PipelineView, _bar, _cabecera, _elide
+from cli.pipeline import ProgressView, _bar, _cabecera, _elide
 
 IDIOMAS_4  = ["EN", "FR", "AR", "ZH"]
 IDIOMAS_14 = ["EN", "FR", "DE", "IT", "PT", "RU", "JA", "KO",
               "ZH", "AR", "FA", "HE", "UR", "PL"]
+
+LARGO = "transcripcion-clase-magistral-seguridad-informatica-2026"
 
 
 @pytest.fixture
@@ -23,6 +24,16 @@ def a_ancho(monkeypatch):
         c.print(vista.render())
         return c.file.getvalue().splitlines()
     return _render
+
+
+def _un_fichero(idiomas=IDIOMAS_4, nombre="apuntes.md"):
+    return ProgressView(nombre, idiomas, {l: 1 for l in idiomas},
+                        show_langs=False, prepare_time=1.2)
+
+
+def _varios(idiomas=IDIOMAS_4, stems=("tema00", "tema01", LARGO)):
+    return ProgressView(f"{len(stems)} files", idiomas,
+                        {s: len(idiomas) for s in stems}, show_langs=True)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -38,14 +49,18 @@ def test_elide_no_toca_lo_que_cabe():
 @pytest.mark.parametrize("ancho", [12, 20, 40])
 def test_la_barra_mide_lo_que_se_le_pide(ancho):
     # Estaba fija a 40 caracteres y en un terminal estrecho caía a la línea siguiente.
-    texto = _bar(50, ancho, "white").plain
-    assert len(texto) == ancho + 1          # +1 por la sangría
+    assert len(_bar(50, ancho, "white").plain) == ancho + 1      # +1 por la sangría
 
 
 def test_la_barra_refleja_el_porcentaje():
     assert _bar(25, 40, "white").plain.count("█") == 10
     assert _bar(0, 40, "white").plain.count("█") == 0
     assert _bar(100, 40, "white").plain.count("░") == 0
+
+
+def test_una_barra_casi_llena_no_se_pinta_llena():
+    # Una fila que sigue subiendo con la barra al 100% se lee como terminada.
+    assert _bar(99.9, 20, "white").plain.count("░") == 1
 
 
 def test_la_cabecera_recorta_los_idiomas_antes_que_envolver():
@@ -62,78 +77,55 @@ def test_la_cabecera_los_muestra_todos_si_caben():
 
 # ── ninguna línea se sale ─────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("ancho", [40, 60, 80, 100, 120])
-def test_pipeline_view_cabe(a_ancho, ancho):
-    v = PipelineView(IDIOMAS_14, "transcripcion-clase-magistral-seguridad-2026.md")
-    v.set_source_done(1.2)
-    v.set_progress(60)
+@pytest.mark.parametrize("ancho", [32, 40, 60, 80, 100, 120])
+def test_la_vista_de_un_fichero_cabe(a_ancho, ancho):
+    v = _un_fichero(IDIOMAS_14, LARGO + ".md")
+    v.update("EN", "translating…")
     assert all(len(l.rstrip()) <= ancho for l in a_ancho(v, ancho))
 
 
-@pytest.mark.parametrize("ancho", [40, 60, 80, 100, 120])
+@pytest.mark.parametrize("ancho", [32, 40, 60, 80, 100, 120])
 @pytest.mark.parametrize("idiomas", [IDIOMAS_4, IDIOMAS_14])
-def test_multi_file_view_cabe(a_ancho, ancho, idiomas):
-    m = MultiFileView(idiomas, ["transcripcion-clase-magistral-larguisima", "b", "c"], 30)
-    assert all(len(l.rstrip()) <= ancho for l in a_ancho(m, ancho))
+def test_la_vista_de_varios_cabe(a_ancho, ancho, idiomas):
+    v = _varios(idiomas)
+    v.update(LARGO, "uploading…", "ZH")
+    assert all(len(l.rstrip()) <= ancho for l in a_ancho(v, ancho))
 
 
-# ── la rejilla nunca pierde columnas ──────────────────────────────────────────
-
-def test_con_sitio_se_usa_la_rejilla(a_ancho):
-    m = MultiFileView(IDIOMAS_4, ["tema01", "tema02"], 10)
-    lineas = a_ancho(m, 100)
-    assert any("FILE" in l and "SRC" in l for l in lineas)
-
-
-def test_la_rejilla_muestra_todos_los_idiomas_o_ninguno(a_ancho):
-    # Lo que no puede pasar es enseñar la tabla con las cabeceras convertidas en "…".
-    m = MultiFileView(IDIOMAS_14, ["tema01"], 15)
-    for ancho in (40, 60, 80, 100, 120):
-        lineas = a_ancho(m, ancho)
-        cabecera = next((l for l in lineas if "FILE" in l), None)
-        if cabecera is not None:
-            assert all(lang in cabecera for lang in IDIOMAS_14)
+def test_la_barra_nunca_baja_de_su_minimo(a_ancho):
+    # Una barra de tres caracteres no dice nada; antes de eso se cae el texto.
+    v = _varios()
+    for ancho in (32, 40, 60):
+        _n, barra, _e, _b = v._medidas(ancho)
+        assert barra >= pipeline._MIN_BAR
 
 
-def test_sin_sitio_cae_al_modo_compacto(a_ancho):
-    # Un glifo por idioma es mejor que una tabla que se queda sin columnas.
-    m = MultiFileView(IDIOMAS_14, ["tema01"], 15)
-    m.set_status("tema01", "EN", "✓ generated")
-    lineas = a_ancho(m, 50)
-    assert not any("FILE" in l for l in lineas)
-    assert any("✓" in l and "·" in l for l in lineas)
+def test_en_un_terminal_estrecho_desaparece_el_estado_entero(a_ancho):
+    # "ge…", "up…" no son palabras: mejor ninguna y que hable el color.
+    v = _varios()
+    _n, _b, estado, _bl = v._medidas(32)
+    assert estado == 0 or estado >= 6
 
 
-def test_el_modo_compacto_pinta_un_glifo_por_idioma(a_ancho):
-    m = MultiFileView(IDIOMAS_14, ["tema01"], 15)
-    m.set_status("tema01", "EN", "✓ generated")
-    m.set_status("tema01", "FR", "✗ failed")
-    m.set_status("tema01", "AR", "translating…")
-    fila = m._fila_compacta("tema01", 10)
-    glifos = fila.plain.strip().split()[-1]
-    assert len(glifos) == len(IDIOMAS_14)
-    assert glifos.startswith("✓✗")
+def test_la_barra_no_se_estira_sin_limite():
+    # A 200 columnas una barra de 190 deja de leerse como barra.
+    v = _varios()
+    _n, barra, _e, _b = v._medidas(200)
+    assert barra <= pipeline._MAX_BAR
 
 
-def test_la_regla_de_medir_no_recorta():
-    # console.measure() viene limitado al ancho de la consola: siempre decía que sí.
-    ancha = Table.grid()
-    ancha.add_column(width=500)
-    ancha.add_row("x")
-    assert pipeline._RULER.measure(ancha).maximum >= 500
+def test_el_total_se_alinea_con_la_columna_de_tiempos(a_ancho):
+    v = _un_fichero()
+    v.complete("EN")
+    lineas = [l for l in a_ancho(v, 100) if l.strip()]
+    fila  = next(l for l in lineas if l.strip().startswith("EN"))
+    total = next(l for l in lineas if "total" in l)
+    assert len(fila.rstrip()) == len(total.rstrip())
 
 
-def test_el_modo_compacto_no_deja_un_desierto_tras_el_nombre(a_ancho):
-    # El nombre se rellenaba hasta todo el hueco sobrante y el estado quedaba
-    # despegado al otro extremo de la pantalla.
-    m = MultiFileView(IDIOMAS_14, ["tema00", "tema01"], 30)
-    lineas = [l for l in a_ancho(m, 60) if l.strip().startswith("tema")]
-    assert lineas
-    for l in lineas:
-        assert "        " not in l.rstrip()      # nada de ocho espacios seguidos
-
-
-def test_el_nombre_mas_largo_marca_el_ancho_de_la_columna(a_ancho):
-    m = MultiFileView(IDIOMAS_14, ["a", "nombre-bastante-mas-largo"], 30)
-    lineas = [l for l in a_ancho(m, 60) if l.strip().startswith(("a ", "nombre"))]
-    assert len({len(l.rstrip()) for l in lineas}) == 1      # ambas filas alineadas
+def test_el_resumen_no_se_parte_en_dos_lineas(a_ancho):
+    # Una segunda línea de resumen empuja las filas y la vista baila en cada refresco.
+    v = _varios(IDIOMAS_14)
+    lineas = a_ancho(v, 40)
+    assert lineas[1].strip().startswith(("0 of", "parsed"))
+    assert lineas[2].strip() == ""

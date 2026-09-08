@@ -59,9 +59,43 @@ def test_sin_clave_el_proveedor_no_se_construye(monkeypatch):
     ("ar", "ar"),
 ])
 def test_azure_mapea_los_codigos_especiales(azure, entrada, esperado):
-    assert azure._map_lang_code(entrada) == esperado
+    assert azure.api_lang(entrada) == esperado
+
+
+@pytest.mark.parametrize("entrada,esperado", [
+    ("EN", "EN-GB"),        # DeepL ya no admite EN como destino salvo por compatibilidad
+    ("PT", "PT-PT"),        # idem
+    ("FR", "FR"),
+    ("ZH", "ZH"),
+])
+def test_deepl_fija_la_variante_de_los_codigos_ambiguos(deepl, entrada, esperado):
+    assert deepl.api_lang(entrada) == esperado
+
+
+def test_el_codigo_que_viaja_a_deepl_es_el_mapeado(deepl, monkeypatch):
+    # El bug no daba error: EN funcionaba como alias obsoleto hasta que dejara de hacerlo.
+    enviados = []
+    monkeypatch.setattr(deepl, "_post_with_retry",
+                        lambda payload, headers: enviados.append(payload) or ["x"])
+    deepl.translate(["hola"], "EN")
+    assert enviados[0]["target_lang"] == "EN-GB"
 
 
 def test_traducir_una_lista_vacia_no_llama_a_la_api(azure, deepl):
     assert azure.translate([], "EN") == []
     assert deepl.translate([], "EN") == []
+
+
+# ── de donde viene cada aviso ─────────────────────────────────────────────────
+
+def test_un_503_de_gemini_no_se_anuncia_como_un_fallo_de_drive():
+    # Pasaba de verdad: una ejecucion en local decia "Google Drive server error".
+    from cli.results import _short_warning
+    assert "Gemini" in _short_warning("Gemini: 503 UNAVAILABLE. The model is overloaded.")
+
+
+def test_un_503_de_drive_sigue_diciendo_drive():
+    from cli.results import _short_warning
+    aviso = _short_warning("<HttpError 503 when requesting "
+                           "https://www.googleapis.com/upload/drive/v3/files>")
+    assert "Google Drive" in aviso

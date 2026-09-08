@@ -107,6 +107,22 @@ class BaseTranslator(ABC):
 
     name: str = "unknown"
 
+    # Codigos que este proveedor escribe distinto, y los que sabe traducir. Se
+    # rellenan desde translators/langs.py; vacios significa "los codigos de la
+    # interfaz valen tal cual" y None en supported significa "no publica lista".
+    lang_codes: dict[str, str] = {}
+    supported:  frozenset[str] | None = None
+
+    def api_lang(self, code: str) -> str:
+        """Codigo de la interfaz → codigo de este proveedor. API: str."""
+        return self.lang_codes.get(code.upper(), code)
+
+    def supports(self, code: str) -> bool | None:
+        """Si traduce a ese idioma. Devuelve None cuando no hay lista que consultar."""
+        if self.supported is None:
+            return None
+        return code.upper() in self.supported
+
     @abstractmethod
     def translate(self, texts: list[str], target_lang: str,
                   source_lang: str | None = None) -> list[str]:
