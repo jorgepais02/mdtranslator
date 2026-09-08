@@ -81,12 +81,15 @@ def show_results(results: list[dict], total_time: float, version: str = "2.1.0")
         padding=(0, 1),
         header_style=DIM,   # dim uppercase headers per spec
     )
-    file_table.add_column("LANG",   style=CYAN,  width=8)
+    # Anchos ajustados al contenido: con 8 cada una, LANG y STATUS se quedaban el
+    # sitio que necesita el nombre del fichero. FILE es la unica columna elastica y
+    # no lleva no_wrap: con el, rich le daba todo el ancho y vaciaba a las demas.
+    file_table.add_column("LANG",   style=CYAN,  width=6, no_wrap=True)
     if multi:
-        file_table.add_column("SOURCE", style=DIM)
-    file_table.add_column("FILE",   style=FG)
-    file_table.add_column("STATUS", width=8)
-    file_table.add_column("TIME",   style=DIM, justify="right", width=8)
+        file_table.add_column("SOURCE", style=DIM, overflow="ellipsis")
+    file_table.add_column("FILE",   style=FG,   overflow="ellipsis")
+    file_table.add_column("STATUS", width=6, justify="center")
+    file_table.add_column("TIME",   style=DIM, justify="right", width=7, no_wrap=True)
 
     for r in results:
         status = Text("✓", style=GREEN) if r["ok"] else Text("✗", style="#e05555")
@@ -110,10 +113,10 @@ def show_results(results: list[dict], total_time: float, version: str = "2.1.0")
             padding=(0, 1),
             header_style=DIM,
         )
-        gdocs_table.add_column("LANG", style=CYAN, width=8)
+        gdocs_table.add_column("LANG", style=CYAN, width=6, no_wrap=True)
         if multi:
-            gdocs_table.add_column("SOURCE", style=DIM)
-        gdocs_table.add_column("URL")
+            gdocs_table.add_column("SOURCE", style=DIM, overflow="ellipsis")
+        gdocs_table.add_column("URL", overflow="ellipsis")
 
         for r in results:
             if r.get("gdocs_url"):
@@ -134,13 +137,20 @@ def show_results(results: list[dict], total_time: float, version: str = "2.1.0")
     warnings = [(r["lang"], r.get("source"), r["warning"]) for r in results if r.get("warning")]
     if warnings:
         parts.append(Text("Warnings", style=f"bold {YELLOW}"))
+        # Rejilla en vez de líneas sueltas: un aviso largo se partía y la segunda
+        # línea empezaba en la columna 0, desalineada del idioma que la encabeza.
+        warn_grid = Table.grid(padding=(0, 2))
+        warn_grid.add_column(style=CYAN, justify="right", width=5, no_wrap=True)
+        if multi:
+            warn_grid.add_column(style=DIM, no_wrap=True, overflow="ellipsis", max_width=20)
+        warn_grid.add_column(style=DIM, overflow="fold")
         for lang, source, msg in warnings:
-            line = Text()
-            line.append(f"  {lang:>3}  ", style=CYAN)
-            if multi and source:
-                line.append(f"{source}  ", style=DIM)
-            line.append(_short_warning(msg), style=DIM)
-            parts.append(line)
+            fila = [lang]
+            if multi:
+                fila.append(source or "—")
+            fila.append(_short_warning(msg))
+            warn_grid.add_row(*fila)
+        parts.append(warn_grid)
         parts.append(Text())
 
     # ── Footer ────────────────────────────────────────────────────────

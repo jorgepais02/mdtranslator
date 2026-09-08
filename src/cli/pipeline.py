@@ -1,5 +1,6 @@
+import io as _io
 from rich.live import Live
-from rich.console import Group
+from rich.console import Console as _Console, Group
 from rich.table import Table
 from rich.text import Text
 from rich import box
@@ -27,6 +28,14 @@ DEFAULT_MAX_WORKERS = 4
 # Líneas que la vista gasta fuera de la tabla (cabecera, barra, encabezados, aire).
 _VIEW_CHROME = 12
 _MIN_ROWS    = 3
+# Suelos por debajo de los cuales la vista deja de tener sentido, no del terminal.
+_MIN_WIDTH   = 32
+_MIN_BAR     = 12
+_MIN_NAME    = 10
+_SRC_COL     = 6
+# Regla para medir tablas: console.measure() viene recortado al ancho real de la
+# consola, asi que siempre respondia que si cabia. Esta no recorta nada.
+_RULER = _Console(file=_io.StringIO(), width=10_000)
 # Gemini free tier: por defecto una llamada cada vez. Subirlo arriesga un 429.
 DEFAULT_GEMINI_WORKERS = 1
 
@@ -35,6 +44,43 @@ DEFAULT_GEMINI_WORKERS = 1
 # crear una carpeta translated/pt/ con contenido espanol y subirla a Drive.
 MIN_LANG_CONFIDENCE = 0.90
 MIN_LANG_SAMPLE     = 60
+
+
+def _ancho() -> int:
+    """Ancho util del terminal. Live usa esta misma consola, asi que coincide."""
+    return max(_MIN_WIDTH, console.width)
+
+
+def _elide(texto: str, cabe: int) -> str:
+    """Recorta por el final dejando puntos suspensivos. Nunca devuelve mas de `cabe`."""
+    if cabe <= 1:
+        return texto[:max(0, cabe)]
+    return texto if len(texto) <= cabe else texto[:cabe - 1] + "…"
+
+
+def _bar(pct: float, ancho: int, style: str, sufijo: str = "") -> Text:
+    """Barra de progreso del ancho que quepa. Estaba fija a 40 y se partia en dos."""
+    lleno = int(round((pct / 100) * ancho))
+    return Text(" " + "█" * lleno + "░" * (ancho - lleno) + sufijo, style=style)
+
+
+def _cabecera(izquierda: str, languages: list[str], ancho: int) -> Text:
+    """Titulo + idiomas, recortando los idiomas antes que dejarlos caer a la linea 2."""
+    header = Text()
+    header.append(f" {izquierda}", style=FG)
+    header.append("  →  ", style=DIM)
+    libre  = ancho - len(izquierda) - 7
+    listado = "  ".join(languages)
+    if len(listado) > libre:
+        cabidos, usado = [], 0
+        for lang in languages:
+            if usado + len(lang) + 2 > libre - 6:
+                break
+            cabidos.append(lang)
+            usado += len(lang) + 2
+        listado = "  ".join(cabidos) + f"  +{len(languages) - len(cabidos)}"
+    header.append(listado, style=CYAN)
+    return header
 
 
 def detect_source_language(texts: list[str]) -> tuple[str | None, str | None]:
@@ -78,14 +124,12 @@ class PipelineView:
 
     def render(self) -> Group:
         parts = []
+        ancho = _ancho()
+        barra = max(_MIN_BAR, min(40, ancho - 5))
 
         # ── header ──────────────────────────────────────────────────────────
-        header = Text()
-        header.append(f" {self.source_file}", style=FG)
-        header.append("  →  ", style=DIM)
-        header.append("  ".join(self.languages), style=CYAN)
-        parts.append(header)
-        parts.append(Text(f" {'─' * 44}", style=DIM))
+        parts.append(_cabecera(self.source_file, self.languages, ancho))
+        parts.append(Text(f" {'─' * min(44, ancho - 2)}", style=DIM))
         parts.append(Text())
 
         # ── source bar ───────────────────────────────────────────────────────
@@ -96,9 +140,9 @@ class PipelineView:
         parts.append(src_label)
 
         if self.source_done:
-            parts.append(Text(" " + "█" * 40 + "  ✓", style=GREEN))
+            parts.append(_bar(100, barra - 3, GREEN, "  ✓"))
         else:
-            parts.append(Text(" " + "█" * 15 + "░" * 25, style=BLUE))
+            parts.append(_bar(37.5, barra, BLUE))
 
         parts.append(Text())
         parts.append(Text())
@@ -110,8 +154,7 @@ class PipelineView:
             trans_label.append(f"   {self.overall_pct}%", style=BRIGHT)
         parts.append(trans_label)
 
-        filled = int((self.overall_pct / 100) * 40)
-        parts.append(Text(" " + "█" * filled + "░" * (40 - filled), style=BLUE))
+        parts.append(_bar(self.overall_pct, barra, BLUE))
         parts.append(Text())
 
         # ── per-language status ───────────────────────────────────────────────
@@ -205,15 +248,58 @@ class MultiFileView:
         orden = {s: i for i, s in enumerate(self.stems)}
         return sorted(elegidos, key=orden.get), len(self.stems) - len(elegidos)
 
+    def _fila_compacta(self, stem: str, ancho_nombre: int) -> Text:
+        linea = Text()
+        linea.append(" " + _elide(stem, ancho_nombre).ljust(ancho_nombre), style=FG)
+        linea.append(f" {self.src_lang[stem]:<3}", style=DIM)
+        linea.append(" ")
+        for lang in self.languages:
+            estado = self.cells[stem][lang]
+            if estado.startswith("✓"):
+                linea.append("✓", style=GREEN)
+            elif estado.startswith("✗"):
+                linea.append("✗", style="#dc3b3b")
+            elif estado == "waiting":
+                linea.append("·", style=DIM)
+            else:
+                linea.append("▸", style=YELLOW)
+        return linea
+
+    def _tabla(self, stems: list[str], ancho: int):
+        """Rejilla completa, o una fila compacta por fichero si no caben las columnas.
+
+        Con catorce idiomas rich estrechaba las columnas hasta hacerlas desaparecer:
+        se veía la lista de ficheros sin un solo estado al lado. Es preferible un
+        glifo por idioma que una tabla que miente.
+        """
+        # Calcular a mano cuánto ocupa la tabla no funcionaba: rich reparte el ancho
+        # con reglas propias y la mía se desviaba justo lo suficiente para que
+        # comprimiera las cabeceras. Se construye y se le pregunta a rich si cabe.
+        for hueco in (40, 28, 20, _MIN_NAME):
+            table = Table(show_edge=False, box=box.SIMPLE, padding=(0, 1), header_style=DIM)
+            table.add_column("FILE", style=FG, no_wrap=True, max_width=hueco)
+            table.add_column("SRC", justify="center", no_wrap=True, width=4)
+            for lang in self.languages:
+                table.add_column(lang, style=CYAN, justify="center", no_wrap=True, width=2)
+            for stem in stems:
+                src = Text()
+                src.append(f"{self.src_lang[stem]} ", style=DIM)
+                src.append_text(self._cell(self.cells[stem]["SRC"]))
+                table.add_row(Text(_elide(stem, hueco), style=FG), src,
+                              *(self._cell(self.cells[stem][l]) for l in self.languages))
+            if _RULER.measure(table).maximum <= ancho:
+                return table
+
+        ancho_nombre = max(_MIN_NAME, ancho - len(self.languages) - _SRC_COL - 2)
+        return Group(*(self._fila_compacta(s, ancho_nombre) for s in stems))
+
     def render(self) -> Group:
         parts = []
+        ancho = _ancho()
+        barra = max(_MIN_BAR, min(40, ancho - 5))
 
-        header = Text()
-        header.append(f" {len(self.stems)} files", style=FG)
-        header.append("  →  ", style=DIM)
-        header.append("  ".join(self.languages), style=CYAN)
-        parts.append(header)
-        parts.append(Text(f" {'─' * 44}", style=DIM))
+        parts.append(_cabecera(f"{len(self.stems)} files", self.languages, ancho))
+        parts.append(Text(f" {'─' * min(44, ancho - 2)}", style=DIM))
         parts.append(Text())
 
         label = Text()
@@ -221,28 +307,11 @@ class MultiFileView:
         label.append(f"   {self.pct}%", style=BRIGHT)
         label.append(f"   {self.completed}/{self.total_tasks}", style=DIM)
         parts.append(label)
-
-        filled = int((self.pct / 100) * 40)
-        parts.append(Text(" " + "█" * filled + "░" * (40 - filled), style=BLUE))
+        parts.append(_bar(self.pct, barra, BLUE))
         parts.append(Text())
 
-        table = Table(show_edge=False, box=box.SIMPLE, padding=(0, 1), header_style=DIM)
-        table.add_column("FILE", style=FG, no_wrap=True)
-        table.add_column("SRC", justify="center")
-        for lang in self.languages:
-            table.add_column(lang, style=CYAN, justify="center")
-
         stems, ocultas = self.visible_stems()
-        for stem in stems:
-            row = [Text(stem, style=FG)]
-            src = Text()
-            src.append(f"{self.src_lang[stem]} ", style=DIM)
-            src.append_text(self._cell(self.cells[stem]["SRC"]))
-            row.append(src)
-            row.extend(self._cell(self.cells[stem][lang]) for lang in self.languages)
-            table.add_row(*row)
-
-        parts.append(table)
+        parts.append(self._tabla(stems, ancho))
         if ocultas:
             parts.append(Text(f"   … y {ocultas} fichero(s) más", style=DIM))
         return Group(*parts)

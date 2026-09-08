@@ -25,8 +25,9 @@ def show_confirmation(config: dict) -> bool:
     if config.get("format_raw"):
         table.add_row("Raw text", "format with Gemini")
 
+    # El suelo de 40 hacia que el panel se saliera en terminales mas estrechos que eso.
     terminal_width = shutil.get_terminal_size().columns
-    panel_width = min(60, max(40, terminal_width - 2))
+    panel_width = max(24, min(60, terminal_width - 2))
 
     console.print(Panel(
         table,
