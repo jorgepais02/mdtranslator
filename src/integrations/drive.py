@@ -179,7 +179,7 @@ class GoogleDocsManager:
                 includeItemsFromAllDrives=True,
                 supportsAllDrives=True,
                 pageToken=page_token
-            ).execute()
+            ).execute(num_retries=3)
             for f in results.get('files', []):
                 if f.get('name', '').strip().lower() == target_name_normalized:
                     return f.get('id')
@@ -193,9 +193,12 @@ class GoogleDocsManager:
         }
         folder = self.drive_service.files().create(
             body=file_metadata, fields='id', supportsAllDrives=True
-        ).execute()
+        ).execute(num_retries=3)
         return folder.get('id')
 
+    # num_retries=3 en todas las lecturas: googleapiclient reintenta con backoff los
+    # 5xx y los 429. Sin eso, un corte de red de un segundo tumbaba la tarea entera,
+    # y con --all son decenas de llamadas donde basta con que falle una.
     def _list_files(self, folder_id: str) -> list[dict]:
         query = f"'{folder_id}' in parents and mimeType != 'application/vnd.google-apps.folder' and trashed=false"
         files: list[dict] = []
@@ -205,7 +208,7 @@ class GoogleDocsManager:
                 q=query, fields='nextPageToken, files(id, name)',
                 corpora='allDrives', includeItemsFromAllDrives=True,
                 supportsAllDrives=True, pageToken=page_token,
-            ).execute()
+            ).execute(num_retries=3)
             files.extend(results.get('files', []))
             page_token = results.get('nextPageToken')
             if not page_token:
@@ -238,7 +241,7 @@ class GoogleDocsManager:
                 q=query, fields='nextPageToken, files(id, name)', orderBy='name',
                 corpora='allDrives', includeItemsFromAllDrives=True,
                 supportsAllDrives=True, pageToken=page_token,
-            ).execute()
+            ).execute(num_retries=3)
             folders.extend(results.get('files', []))
             page_token = results.get('nextPageToken')
             if not page_token:
@@ -248,7 +251,7 @@ class GoogleDocsManager:
     def get_folder_info(self, folder_id: str) -> dict:
         """Nombre y padre de una carpeta. API: {id, name, parents}."""
         return self.drive_service.files().get(
-            fileId=folder_id, fields='id, name, parents', supportsAllDrives=True).execute()
+            fileId=folder_id, fields='id, name, parents', supportsAllDrives=True).execute(num_retries=3)
 
     @staticmethod
     def _pattern_to_regex(pattern: str, title: str | None = None,
