@@ -121,3 +121,19 @@ def test_la_regla_de_medir_no_recorta():
     ancha.add_column(width=500)
     ancha.add_row("x")
     assert pipeline._RULER.measure(ancha).maximum >= 500
+
+
+def test_el_modo_compacto_no_deja_un_desierto_tras_el_nombre(a_ancho):
+    # El nombre se rellenaba hasta todo el hueco sobrante y el estado quedaba
+    # despegado al otro extremo de la pantalla.
+    m = MultiFileView(IDIOMAS_14, ["tema00", "tema01"], 30)
+    lineas = [l for l in a_ancho(m, 60) if l.strip().startswith("tema")]
+    assert lineas
+    for l in lineas:
+        assert "        " not in l.rstrip()      # nada de ocho espacios seguidos
+
+
+def test_el_nombre_mas_largo_marca_el_ancho_de_la_columna(a_ancho):
+    m = MultiFileView(IDIOMAS_14, ["a", "nombre-bastante-mas-largo"], 30)
+    lineas = [l for l in a_ancho(m, 60) if l.strip().startswith(("a ", "nombre"))]
+    assert len({len(l.rstrip()) for l in lineas}) == 1      # ambas filas alineadas

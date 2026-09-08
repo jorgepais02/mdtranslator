@@ -284,7 +284,10 @@ class MultiFileView:
             if _RULER.measure(table).maximum <= ancho:
                 return table
 
-        ancho_nombre = max(_MIN_NAME, ancho - len(self.languages) - _SRC_COL - 2)
+        hueco = max(_MIN_NAME, ancho - len(self.languages) - _SRC_COL - 2)
+        # Al ancho del nombre mas largo, no a todo el hueco sobrante: rellenar hasta
+        # el final dejaba un desierto entre el nombre y su estado.
+        ancho_nombre = min(hueco, max((len(s) for s in stems), default=_MIN_NAME))
         return Group(*(self._fila_compacta(s, ancho_nombre) for s in stems))
 
     def render(self) -> Group:
