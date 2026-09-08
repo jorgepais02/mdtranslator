@@ -17,13 +17,16 @@ from translators import get_translator
 from translators.base import call_translate
 from document.refiner import refine_markdown
 from core.parser import parse_markdown_lines, rebuild_markdown_from_translations
-from core.docgen import generate_docx_document, convert_docx_to_pdf
+from core.docgen import generate_docx_document, convert_many_to_pdf
 from core.config import TRANSLATED_DIR, DRIVE_FOLDER_ID, CONFIG
 from core.sources import collect_sources, load_markdown, needs_formatting
 from integrations.drive import GoogleDocsManager
 
 
 DEFAULT_MAX_WORKERS = 4
+# Líneas que la vista gasta fuera de la tabla (cabecera, barra, encabezados, aire).
+_VIEW_CHROME = 12
+_MIN_ROWS    = 3
 # Gemini free tier: por defecto una llamada cada vez. Subirlo arriesga un 429.
 DEFAULT_GEMINI_WORKERS = 1
 
@@ -176,6 +179,32 @@ class MultiFileView:
         glyph, style = _CELL_GLYPHS.get(status, ("·", DIM))
         return Text(glyph, style=style)
 
+    @staticmethod
+    def _done(estado: str) -> bool:
+        return estado.startswith("✓") or estado.startswith("✗")
+
+    def visible_stems(self, alto: int | None = None) -> tuple[list[str], int]:
+        """Filas que caben en pantalla, y cuántas se ocultan. API: (stems, ocultas).
+
+        Con --all sobre treinta ficheros la tabla se salía del terminal y arrastraba
+        la barra de progreso con ella. Se prioriza lo que está en marcha; lo terminado
+        cede el sitio, que para eso está la tabla de resultados del final.
+        """
+        if alto is None:
+            alto = shutil.get_terminal_size(fallback=(80, 24)).lines
+        cupo = max(_MIN_ROWS, alto - _VIEW_CHROME)
+        if len(self.stems) <= cupo:
+            return self.stems, 0
+
+        activos    = [s for s in self.stems
+                      if any(not self._done(e) for e in self.cells[s].values())]
+        terminados = [s for s in self.stems if s not in set(activos)]
+        elegidos   = (activos + terminados)[:cupo]
+        # Se muestran en el orden original, no en el de prioridad: si las filas bailan
+        # de sitio en cada refresco no hay quien lea la tabla.
+        orden = {s: i for i, s in enumerate(self.stems)}
+        return sorted(elegidos, key=orden.get), len(self.stems) - len(elegidos)
+
     def render(self) -> Group:
         parts = []
 
@@ -203,7 +232,8 @@ class MultiFileView:
         for lang in self.languages:
             table.add_column(lang, style=CYAN, justify="center")
 
-        for stem in self.stems:
+        stems, ocultas = self.visible_stems()
+        for stem in stems:
             row = [Text(stem, style=FG)]
             src = Text()
             src.append(f"{self.src_lang[stem]} ", style=DIM)
@@ -213,6 +243,8 @@ class MultiFileView:
             table.add_row(*row)
 
         parts.append(table)
+        if ocultas:
+            parts.append(Text(f"   … y {ocultas} fichero(s) más", style=DIM))
         return Group(*parts)
 
 
@@ -351,6 +383,11 @@ def run_pipeline(config: dict) -> list[dict]:
                 continue
             tasks.append((doc, lang, False))
 
+    # Las tareas que pasan por Gemini van primero. El refinamiento está serializado por
+    # cuota, así que si AR y ZH salen las últimas los demás hilos acaban parados
+    # esperándolas; lanzándolas antes, EN y FR se solapan con su cola.
+    tasks.sort(key=lambda t: not needs_refine(t[1]))
+
     single      = len(docs) == 1
     view        = (PipelineView(languages, docs[0].path.name) if single
                    else MultiFileView(languages, [d.stem for d in docs], len(tasks)))
@@ -359,6 +396,8 @@ def run_pipeline(config: dict) -> list[dict]:
     scratch:     set[Path] = set()        # ficheros creados aquí, borrables si no_local
     folders_lock = threading.Lock()
     cancelled    = threading.Event()      # Ctrl+C: corta las tareas que aún no han salido
+    in_flight    = 0                      # tareas que ya no se pueden cancelar
+    pdf_jobs: list[tuple[Path, str, str]] = []   # (docx, fichero fuente, idioma)
     completed    = 0
 
     if single:
@@ -396,6 +435,7 @@ def run_pipeline(config: dict) -> list[dict]:
                 live.update(view.render())
 
         def _run_task(doc: SourceDoc, lang: str, is_source: bool) -> dict:
+            nonlocal in_flight
             # short manda el formato del documento (RTL, CJK, plantilla); slug manda el
             # destino. Colapsar EN y EN-GB a "en" hacía que las dos tareas escribieran el
             # mismo fichero a la vez y subieran encima la una de la otra.
@@ -413,6 +453,8 @@ def run_pipeline(config: dict) -> list[dict]:
                         "time": 0.0, "gdocs_url": None, "warning": "cancelled"}
 
             _update(doc, lang, is_source, "translating…")
+            with folders_lock:
+                in_flight += 1
 
             try:
                 if cancelled.is_set():
@@ -455,10 +497,8 @@ def run_pipeline(config: dict) -> list[dict]:
 
                 if not no_local:
                     if not pdf_file.exists() or docx_file.stat().st_mtime > pdf_file.stat().st_mtime:
-                        try:
-                            convert_docx_to_pdf(docx_file)
-                        except Exception as pdf_err:
-                            warning = warning or str(pdf_err)
+                        with folders_lock:
+                            pdf_jobs.append((docx_file, doc.path.name, lang))
 
                 # The source document is only uploaded when its language was requested.
                 upload = g_manager is not None and (
@@ -496,6 +536,9 @@ def run_pipeline(config: dict) -> list[dict]:
                         "✗ auth fail" if "auth" in err
                         else "✗ timeout" if "timeout" in err
                         else "✗ failed")
+            finally:
+                with folders_lock:
+                    in_flight -= 1
 
             elapsed = time.monotonic() - t_lang
             if ok:
@@ -529,10 +572,30 @@ def run_pipeline(config: dict) -> list[dict]:
             # Sin esto el pool espera a las 40 tareas ya encoladas: el Ctrl+C no se
             # nota y los documentos siguen subiendo a Drive minutos despues.
             cancelled.set()
+            # Una petición HTTP ya lanzada no se puede abortar: mejor decir por qué
+            # tarda en salir que dar la sensación de que el Ctrl+C se ha ignorado.
+            with folders_lock:
+                quedan = in_flight
+            if quedan:
+                console.print(f"\n[{YELLOW}]Cancelando… {quedan} petición(es) ya en curso, "
+                              f"no se pueden abortar a medias.[/{YELLOW}]")
             executor.shutdown(wait=True, cancel_futures=True)
             raise
         finally:
             executor.shutdown(wait=True)
+
+    # ── Phase 3 — PDFs: una sola invocación de LibreOffice ────────────────────
+    # Arrancar el proceso cuesta ~1,4s y convertir un documento ~0,2s. Uno por
+    # documento pagaba el arranque tantas veces como tareas hubiera.
+    if pdf_jobs and not cancelled.is_set():
+        console.print(f"\n[{DIM}]Generating {len(pdf_jobs)} PDF(s)…[/{DIM}]")
+        fallos   = convert_many_to_pdf([job[0] for job in pdf_jobs], max_workers)
+        por_tarea = {(r["source"], r["lang"]): r for r in all_results}
+        for docx, source, lang in pdf_jobs:
+            if docx in fallos:
+                resultado = por_tarea.get((source, lang))
+                if resultado is not None:
+                    resultado["warning"] = resultado["warning"] or fallos[docx]
 
     # Local files are scratch space when the output is Drive-only — clear them once
     # every task is done, never mid-run while another thread still writes there.

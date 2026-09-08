@@ -5,6 +5,7 @@ import platform
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .config import CONFIG, PROJECT_ROOT
@@ -30,11 +31,8 @@ def _soffice_exe() -> str:
     return "soffice"
 
 
-def convert_docx_to_pdf(docx_file: Path) -> None:
-    """Convert a DOCX to PDF using LibreOffice headless. Raises RuntimeError on failure."""
-    outdir = docx_file.parent
-    pdf_file = docx_file.with_suffix(".pdf")
-
+def _soffice_convert(docx_files: list[Path], outdir: Path, timeout: int) -> None:
+    """Invoca LibreOffice una vez para todos los ficheros que van a la misma carpeta."""
     # LibreOffice locks a single shared user profile: concurrent calls that reuse it
     # attach to the running instance and return 0 without writing any PDF. A private
     # profile per call keeps parallel conversions independent.
@@ -47,19 +45,59 @@ def convert_docx_to_pdf(docx_file: Path) -> None:
                 "--headless", "--norestore", "--nofirststartwizard", "--nologo",
                 "--convert-to", "pdf",
                 "--outdir", str(outdir),
-                str(docx_file),
+                *(str(f) for f in docx_files),
             ],
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=timeout,
         )
         if result.returncode != 0:
             raise RuntimeError(f"PDF conversion failed: {result.stderr.strip()}")
-        if not pdf_file.exists():
-            raise RuntimeError("PDF conversion failed: LibreOffice produced no output")
     except FileNotFoundError:
         raise RuntimeError("LibreOffice not found — install: brew install --cask libreoffice")
     except subprocess.TimeoutExpired:
         raise RuntimeError("PDF conversion timed out")
     finally:
         shutil.rmtree(profile, ignore_errors=True)
+
+
+def convert_docx_to_pdf(docx_file: Path) -> None:
+    """Convert a DOCX to PDF using LibreOffice headless. Raises RuntimeError on failure."""
+    _soffice_convert([docx_file], docx_file.parent, timeout=180)
+    if not docx_file.with_suffix(".pdf").exists():
+        raise RuntimeError("PDF conversion failed: LibreOffice produced no output")
+
+
+def convert_many_to_pdf(docx_files: list[Path], max_workers: int = 4) -> dict[Path, str]:
+    """Convierte varios DOCX a PDF. API: {docx que ha fallado: motivo}.
+
+    Arrancar LibreOffice cuesta ~1,4s y convertir un documento ~0,2s, así que el
+    proceso es casi todo el gasto: una sola invocación para los ocho documentos de una
+    carpeta tarda lo que tres invocaciones sueltas.
+
+    Se agrupa por carpeta porque --outdir es uno solo, y los grupos van en paralelo:
+    en serie, un documento en cuatro idiomas pagaba cuatro arranques seguidos y salía
+    más caro que no agrupar nada. Un fallo se atribuye al fichero cuyo PDF falta.
+    """
+    if not docx_files:
+        return {}
+
+    por_carpeta: dict[Path, list[Path]] = {}
+    for f in docx_files:
+        por_carpeta.setdefault(f.parent, []).append(f)
+
+    def _grupo(item: tuple[Path, list[Path]]) -> dict[Path, str]:
+        outdir, grupo = item
+        try:
+            _soffice_convert(grupo, outdir, timeout=180 + 30 * len(grupo))
+        except RuntimeError as e:
+            motivo = str(e)
+        else:
+            motivo = "LibreOffice produced no output"
+        return {f: motivo for f in grupo if not f.with_suffix(".pdf").exists()}
+
+    fallos: dict[Path, str] = {}
+    with ThreadPoolExecutor(max_workers=max(1, min(len(por_carpeta), max_workers))) as ex:
+        for parciales in ex.map(_grupo, por_carpeta.items()):
+            fallos.update(parciales)
+    return fallos
