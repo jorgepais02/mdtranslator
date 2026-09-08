@@ -4,6 +4,13 @@ from rich.console import Console
 
 console = Console()
 
+def elide(texto: str, cabe: int) -> str:
+    """Recorta por el final dejando puntos suspensivos. Nunca devuelve mas de `cabe`."""
+    if cabe <= 1:
+        return texto[:max(0, cabe)]
+    return texto if len(texto) <= cabe else texto[:cabe - 1] + "\u2026"
+
+
 def clear_screen():
     """Clear terminal screen synchronously through Python's stdout buffer."""
     sys.stdout.flush()

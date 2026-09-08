@@ -12,7 +12,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from langdetect import detect_langs as _detect_langs, DetectorFactory as _LDF
 _LDF.seed = 0
-from .styles import console, GREEN, BLUE, YELLOW, CYAN, DIM, BRIGHT, FG, needs_refine
+from .styles import (console, elide as _elide, GREEN, BLUE, YELLOW, CYAN, DIM,
+                     BRIGHT, FG, needs_refine)
 
 from translators import get_translator
 from translators.base import call_translate
@@ -49,13 +50,6 @@ MIN_LANG_SAMPLE     = 60
 def _ancho() -> int:
     """Ancho util del terminal. Live usa esta misma consola, asi que coincide."""
     return max(_MIN_WIDTH, console.width)
-
-
-def _elide(texto: str, cabe: int) -> str:
-    """Recorta por el final dejando puntos suspensivos. Nunca devuelve mas de `cabe`."""
-    if cabe <= 1:
-        return texto[:max(0, cabe)]
-    return texto if len(texto) <= cabe else texto[:cabe - 1] + "…"
 
 
 def _bar(pct: float, ancho: int, style: str, sufijo: str = "") -> Text:

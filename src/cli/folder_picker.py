@@ -16,7 +16,7 @@ from pathlib import Path
 
 import questionary
 
-from .styles import console, WIZARD_STYLE, GREEN, DIM, FG
+from .styles import console, elide, WIZARD_STYLE, GREEN, DIM, FG
 
 from core.config import PROJECT_ROOT
 
@@ -76,13 +76,17 @@ def pick_drive_folder(manager=None) -> str | None:
             console.print(f"[red]✗ No se pudo leer la carpeta: {e}[/red]")
             return None
 
-        by_label = {f"📁  {f['name']}": f for f in subs}
+        # El nombre se recorta: questionary parte en dos lineas las opciones largas
+        # y la carpeta seleccionada deja de leerse de un vistazo.
+        cabe = max(16, console.width - 8)
+        by_label = {f"📁  {elide(f['name'], cabe)}": f for f in subs}
         choices = [_USE, *by_label]
         if current != ROOT:
             choices.append(_UP)
         choices += [_PASTE, _CANCEL]
 
-        console.print(f"\n[{DIM}]Carpeta actual:[/{DIM}] [{FG}]{label}[/{FG}]"
+        console.print(f"\n[{DIM}]Carpeta actual:[/{DIM}] "
+                      f"[{FG}]{elide(label, max(16, console.width - 28))}[/{FG}]"
                       f"  [{DIM}]({len(subs)} subcarpeta(s))[/{DIM}]")
 
         answer = _ask(lambda: questionary.select(
@@ -98,7 +102,8 @@ def pick_drive_folder(manager=None) -> str | None:
         if answer == _USE:
             if current == ROOT:
                 current = g.get_folder_info(ROOT)["id"]  # id real de "Mi unidad"
-            console.print(f"[{GREEN}]✓ Carpeta seleccionada:[/{GREEN}] [{FG}]{label}[/{FG}]")
+            console.print(f"[{GREEN}]✓ Carpeta seleccionada:[/{GREEN}] "
+                          f"[{FG}]{elide(label, max(16, console.width - 26))}[/{FG}]")
             return current
 
         if answer == _UP:
@@ -121,7 +126,8 @@ def pick_drive_folder(manager=None) -> str | None:
             except Exception as e:
                 console.print(f"[red]✗ No puedo acceder a esa carpeta: {e}[/red]")
                 continue
-            console.print(f"[{GREEN}]✓ Carpeta seleccionada:[/{GREEN}] [{FG}]{info['name']}[/{FG}]")
+            console.print(f"[{GREEN}]✓ Carpeta seleccionada:[/{GREEN}] "
+                          f"[{FG}]{elide(info['name'], max(16, console.width - 26))}[/{FG}]")
             return info["id"]
 
         entry = by_label[answer]

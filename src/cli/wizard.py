@@ -1,11 +1,28 @@
 import questionary
 from pathlib import Path
 from rich.text import Text
-from .styles import console, WIZARD_STYLE, LANGUAGES, GREEN, BLUE, DIM, FG, BRIGHT
+from .styles import (console, elide, WIZARD_STYLE, LANGUAGES, GREEN, BLUE,
+                     DIM, FG, BRIGHT)
 
 from core.sources import ALL_FILES, VALID_EXTS, collect_sources, needs_formatting
 
 VERSION = "2.1.0"
+
+def _ancho() -> int:
+    return max(32, console.width)
+
+
+def _opciones(nombres: list[str]) -> list:
+    """Opciones para questionary con el titulo recortado y el valor intacto.
+
+    questionary envuelve las opciones largas en dos lineas y la seleccion deja de
+    leerse. Recortando solo el titulo, collect_sources sigue recibiendo el nombre real.
+    """
+    cabe = _ancho() - 6
+    return [nombre if len(nombre) <= cabe
+            else questionary.Choice(title=elide(nombre, cabe), value=nombre)
+            for nombre in nombres]
+
 
 def _ask(fn):
     try:
@@ -14,20 +31,27 @@ def _ask(fn):
         return None
 
 def _print_select(label: str, choices: list[str], selected: str):
-    """Print a completed select block — label + all options, selected in green."""
-    console.print(f"[{FG}]{label}[/{FG}]")
+    """Print a completed select block — label + all options, selected in green.
+
+    Los valores se recortan al ancho del terminal: al envolverse, la segunda linea
+    empezaba en la columna 0 y el ❯ dejaba de senalar a nada.
+    """
+    cabe = _ancho() - 4
+    console.print(f"[{FG}]{elide(label, _ancho())}[/{FG}]")
     for c in choices:
+        texto = elide(c, cabe)
         if c == selected:
-            console.print(f"  [bold {GREEN}]❯ {c}[/bold {GREEN}]")
+            console.print(f"  [bold {GREEN}]❯ {texto}[/bold {GREEN}]")
         else:
-            console.print(f"  [{DIM}]  {c}[/{DIM}]")
+            console.print(f"  [{DIM}]  {texto}[/{DIM}]")
     console.print()
 
 def _print_text(label: str, instruction: str, value: str):
     """Print a completed text field — label + instruction + value in green."""
-    console.print(f"[{FG}]{label}[/{FG}]")
-    console.print(f"  [{DIM}]{instruction}[/{DIM}]")
-    console.print(f"  [bold {GREEN}]❯ {value}[/bold {GREEN}]")
+    console.print(f"[{FG}]{elide(label, _ancho())}[/{FG}]")
+    if instruction:
+        console.print(f"  [{DIM}]{elide(instruction, _ancho() - 2)}[/{DIM}]")
+    console.print(f"  [bold {GREEN}]❯ {elide(value, _ancho() - 4)}[/bold {GREEN}]")
     console.print()
 
 def run_wizard(preselected_source: str = None) -> dict | None:
@@ -49,7 +73,7 @@ def run_wizard(preselected_source: str = None) -> dict | None:
     else:
         source = _ask(lambda: questionary.select(
             "Select source file",
-            choices=source_choices,
+            choices=_opciones(source_choices),
             style=WIZARD_STYLE,
             erase_when_done=True,
         ).ask())
@@ -75,9 +99,10 @@ def run_wizard(preselected_source: str = None) -> dict | None:
     raw = [p for p in selected if needs_formatting(p)]
     format_raw = False
     if raw:
-        names = ", ".join(p.name for p in raw[:3]) + ("…" if len(raw) > 3 else "")
-        label = (f"Format {names} into Markdown with Gemini AI?" if len(raw) == 1
-                 else f"Format {len(raw)} raw files ({names}) into Markdown with Gemini AI?")
+        if len(raw) == 1:
+            label = f"Format {elide(raw[0].name, max(16, _ancho() - 40))} with Gemini AI?"
+        else:
+            label = f"Format {len(raw)} raw files with Gemini AI?"
         answer = _ask(lambda: questionary.confirm(
             label,
             default=True,
@@ -120,10 +145,16 @@ def run_wizard(preselected_source: str = None) -> dict | None:
     known_line.append("  ".join(["EN", "ES", "FR", "DE", "IT", "PT", "ZH", "JA", "KO", "AR"]), style=BRIGHT)
     console.print(known_line)
 
+    URL = "https://www.deepl.com/docs-api/translate-text"
     more_line = Text()
-    more_line.append("  More codes:   ", style=DIM)
-    more_line.append("https://www.deepl.com/docs-api/translate-text", style=f"underline {BLUE}")
-    console.print(more_line)
+    if _ancho() >= len(URL) + 18:
+        more_line.append("  More codes:   ", style=DIM)
+        more_line.append(URL, style=f"underline {BLUE}")
+    else:
+        # El enlace no se recorta —dejaria de ser pinchable—, se baja de linea.
+        more_line.append("  More codes:\n  ", style=DIM)
+        more_line.append(URL, style=f"underline {BLUE}")
+    console.print(more_line, overflow="ignore", crop=False)
     console.print()
 
     while True:
