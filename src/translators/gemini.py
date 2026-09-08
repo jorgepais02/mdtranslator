@@ -39,16 +39,21 @@ class GeminiTranslator(BaseTranslator):
         self._client = genai.Client(api_key=self._api_key)
         self._types = _types
 
-    def translate(self, texts: list[str], target_lang: str) -> list[str]:
+    def translate(self, texts: list[str], target_lang: str,
+                  source_lang: str | None = None) -> list[str]:
         if not texts:
             return []
         lang_name = self._LANG_NAMES.get(target_lang.upper().split("-")[0], target_lang)
+        src_name  = (self._LANG_NAMES.get(source_lang.upper().split("-")[0], source_lang)
+                     if source_lang else None)
         results: list[str] = []
 
         for i in range(0, len(texts), self.max_batch_size):
             chunk = texts[i: i + self.max_batch_size]
             numbered = "\n".join(f"{j+1}. {t}" for j, t in enumerate(chunk))
             prompt = self._PROMPT_TMPL.format(lang_name=lang_name, numbered=numbered)
+            if src_name:
+                prompt = f"The source text is written in {src_name}.\n" + prompt
             try:
                 response = self._client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
                 lines = [l.strip() for l in response.text.strip().splitlines() if l.strip()]

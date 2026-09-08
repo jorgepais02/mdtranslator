@@ -1,7 +1,7 @@
 import os
 import time
 import requests
-from .base import BaseTranslator, TranslationError
+from .base import BaseTranslator, TranslationError, chunk_texts
 
 _MAX_RETRIES = 3
 _BASE_DELAY  = 1.0
@@ -25,6 +25,9 @@ class DeepLTranslator(BaseTranslator):
 
         self.translate_url = f"{self.base_url}/v2/translate"
         self.max_batch_size = 50
+        # El limite real del endpoint es 128 KiB por peticion; 100.000 deja margen
+        # para la cabecera JSON y el escapado.
+        self.max_batch_chars = 100_000
 
     def _post_with_retry(self, payload: dict, headers: dict) -> list[str]:
         for attempt in range(_MAX_RETRIES):
@@ -48,7 +51,8 @@ class DeepLTranslator(BaseTranslator):
                 raise TranslationError(f"DeepL API request failed: {e}") from e
         raise TranslationError("DeepL API: max retries exceeded")
 
-    def translate(self, texts: list[str], target_lang: str) -> list[str]:
+    def translate(self, texts: list[str], target_lang: str,
+                  source_lang: str | None = None) -> list[str]:
         if not texts:
             return []
 
@@ -58,8 +62,10 @@ class DeepLTranslator(BaseTranslator):
         }
         results: list[str] = []
 
-        for i in range(0, len(texts), self.max_batch_size):
-            chunk = texts[i: i + self.max_batch_size]
-            results.extend(self._post_with_retry({"text": chunk, "target_lang": target_lang}, headers))
+        for chunk in chunk_texts(texts, self.max_batch_size, self.max_batch_chars):
+            payload = {"text": chunk, "target_lang": target_lang}
+            if source_lang:
+                payload["source_lang"] = source_lang.split("-")[0].upper()
+            results.extend(self._post_with_retry(payload, headers))
 
         return results

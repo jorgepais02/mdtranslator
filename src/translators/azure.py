@@ -1,7 +1,7 @@
 import os
 import time
 import requests
-from .base import BaseTranslator, TranslationError
+from .base import BaseTranslator, TranslationError, chunk_texts
 
 _MAX_RETRIES = 4
 _BASE_DELAY  = 1.0
@@ -20,6 +20,9 @@ class AzureTranslator(BaseTranslator):
 
         self.translate_url = "https://api.cognitive.microsofttranslator.com/translate"
         self.max_batch_size = 100
+        # Azure rechaza con 400 cualquier peticion de mas de 50.000 caracteres; 45.000
+        # deja margen. Contar solo elementos dejaba pasar peticiones de 60.000.
+        self.max_batch_chars = 45_000
 
     def _map_lang_code(self, lang: str) -> str:
         if lang.upper() == "EN-GB":
@@ -57,7 +60,8 @@ class AzureTranslator(BaseTranslator):
                 raise TranslationError(f"Azure API request failed: {e}{detail}") from e
         raise TranslationError("Azure API: max retries exceeded")
 
-    def translate(self, texts: list[str], target_lang: str) -> list[str]:
+    def translate(self, texts: list[str], target_lang: str,
+                  source_lang: str | None = None) -> list[str]:
         if not texts:
             return []
 
@@ -65,9 +69,11 @@ class AzureTranslator(BaseTranslator):
         if self.region:
             headers["Ocp-Apim-Subscription-Region"] = self.region
 
-        params  = {"api-version": "3.0", "to": [self._map_lang_code(target_lang)]}
+        params = {"api-version": "3.0", "to": [self._map_lang_code(target_lang)]}
+        if source_lang:
+            params["from"] = self._map_lang_code(source_lang)
+
         results = []
-        for i in range(0, len(texts), self.max_batch_size):
-            chunk = texts[i: i + self.max_batch_size]
+        for chunk in chunk_texts(texts, self.max_batch_size, self.max_batch_chars):
             results.extend(self._post_with_retry(params, [{"text": t} for t in chunk], headers))
         return results
