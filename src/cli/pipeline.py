@@ -24,6 +24,8 @@ from integrations.drive import GoogleDocsManager
 
 
 DEFAULT_MAX_WORKERS = 4
+# Gemini free tier: por defecto una llamada cada vez. Subirlo arriesga un 429.
+DEFAULT_GEMINI_WORKERS = 1
 
 # Por debajo de esta confianza no se asume ningun idioma: langdetect confunde
 # espanol con portugues o italiano en textos cortos, y acertar a medias significa
@@ -235,45 +237,64 @@ class SourceDoc:
         return self.path.stem
 
 
-def _prepare_docs(files: list[Path], format_raw: bool,
-                  forced_lang: str | None = None) -> tuple[list[SourceDoc], list[dict]]:
-    """Read, format and parse every source. Returns (docs, failures)."""
-    docs:     list[SourceDoc] = []
-    failures: list[dict] = []
+def _failure(path: Path, warning: str) -> dict:
+    return {"lang": "—", "source": path.name, "file": "—", "ok": False,
+            "time": 0.0, "gdocs_url": None, "warning": warning}
 
-    for path in files:
-        if format_raw and needs_formatting(path):
-            console.print(f"[{DIM}]Formatting {path.name} with Gemini AI…[/{DIM}]")
-        content, warning = load_markdown(path, allow_format=format_raw)
-        if not content.strip():
-            failures.append({
-                "lang": "—", "source": path.name, "file": "—", "ok": False,
-                "time": 0.0, "gdocs_url": None,
-                "warning": warning or f"{path.name} produced no content",
-            })
-            continue
 
-        doc = SourceDoc(path=path, content=content, warning=warning)
-        try:
-            doc.parsed = parse_markdown_lines(content.splitlines())
-            doc.texts  = [text for _, _pfx, text in doc.parsed if text]
-        except Exception as e:
-            failures.append({
-                "lang": "—", "source": path.name, "file": "—", "ok": False,
-                "time": 0.0, "gdocs_url": None,
-                "warning": f"Could not parse {path.name}: {e}",
-            })
-            continue
+def _prepare_one(path: Path, format_raw: bool, forced_lang: str | None,
+                 gemini_sem: threading.Semaphore) -> SourceDoc | dict:
+    """Read, format and parse one source. Returns a SourceDoc or a failure dict."""
+    # El formateo con Gemini es la única parte de red de esta fase, y comparte
+    # presupuesto con el refinamiento: fuera del semáforo va todo lo demás.
+    if format_raw and needs_formatting(path):
+        with gemini_sem:
+            content, warning = load_markdown(path, allow_format=True)
+    else:
+        content, warning = load_markdown(path, allow_format=False)
 
-        if forced_lang:
-            doc.src_lang = forced_lang.lower().split("-")[0]
-        else:
-            doc.src_lang, lang_warning = detect_source_language(doc.texts)
-            if lang_warning:
-                doc.warning = doc.warning or f"{path.name}: {lang_warning}"
+    if not content.strip():
+        return _failure(path, warning or f"{path.name} produced no content")
 
-        docs.append(doc)
+    doc = SourceDoc(path=path, content=content, warning=warning)
+    try:
+        doc.parsed = parse_markdown_lines(content.splitlines())
+        doc.texts  = [text for _, _pfx, text in doc.parsed if text]
+    except Exception as e:
+        return _failure(path, f"Could not parse {path.name}: {e}")
 
+    if forced_lang:
+        doc.src_lang = forced_lang.lower().split("-")[0]
+    else:
+        doc.src_lang, lang_warning = detect_source_language(doc.texts)
+        if lang_warning:
+            doc.warning = doc.warning or f"{path.name}: {lang_warning}"
+
+    return doc
+
+
+def _prepare_docs(files: list[Path], format_raw: bool, forced_lang: str | None = None,
+                  max_workers: int = DEFAULT_MAX_WORKERS,
+                  gemini_sem: threading.Semaphore | None = None,
+                  ) -> tuple[list[SourceDoc], list[dict]]:
+    """Read, format and parse every source. Returns (docs, failures).
+
+    Se hacía en serie: con --all sobre varias transcripciones, el formateo con Gemini
+    de la última esperaba al de todas las anteriores antes de que el pipeline empezara
+    siquiera. El orden de salida se mantiene aunque terminen desordenadas.
+    """
+    gemini_sem = gemini_sem or threading.Semaphore(1)
+    pendientes = [p for p in files if format_raw and needs_formatting(p)]
+    if pendientes:
+        console.print(f"[{DIM}]Formatting {', '.join(p.name for p in pendientes)} "
+                      f"with Gemini AI…[/{DIM}]")
+
+    with ThreadPoolExecutor(max_workers=max(1, min(len(files), max_workers))) as ex:
+        salida = list(ex.map(
+            lambda p: _prepare_one(p, format_raw, forced_lang, gemini_sem), files))
+
+    docs     = [r for r in salida if isinstance(r, SourceDoc)]
+    failures = [r for r in salida if not isinstance(r, SourceDoc)]
     return docs, failures
 
 
@@ -292,12 +313,18 @@ def run_pipeline(config: dict) -> list[dict]:
 
     use_google = "Google Drive" in output_cfg
     no_local   = output_cfg == "Google Drive"
-    max_workers = max(1, int(CONFIG.get("pipeline", {}).get("max_workers", DEFAULT_MAX_WORKERS)))
+    pipe_cfg   = CONFIG.get("pipeline", {})
+    max_workers = max(1, int(pipe_cfg.get("max_workers", DEFAULT_MAX_WORKERS)))
+    # Presupuesto único de Gemini para toda la ejecución: el formateo de las fuentes y
+    # el refinamiento van contra la misma cuota, así que comparten semáforo.
+    gemini_sem = threading.Semaphore(
+        max(1, int(pipe_cfg.get("gemini_workers", DEFAULT_GEMINI_WORKERS))))
 
     # ── Phase 0 — read, format raw text, parse ────────────────────────────────
     console.print()
     t_prepare = time.monotonic()
-    docs, all_results = _prepare_docs(files, format_raw, forced_lang)
+    docs, all_results = _prepare_docs(files, format_raw, forced_lang,
+                                      max_workers=max_workers, gemini_sem=gemini_sem)
     prepare_elapsed = time.monotonic() - t_prepare
     if not docs:
         return all_results
@@ -306,7 +333,9 @@ def run_pipeline(config: dict) -> list[dict]:
     # Authenticate once; each thread builds its own service objects from shared creds
     if use_google:
         GoogleDocsManager.reset_run_state()   # los listados cacheados son de esta ejecución
-        shared_creds = GoogleDocsManager(console=console).creds
+        _drive = GoogleDocsManager(console=console)
+        _drive.ensure_fresh_credentials()     # antes del pool, no a mitad y por 4 hilos
+        shared_creds = _drive.creds
     else:
         shared_creds = None
 
@@ -326,7 +355,6 @@ def run_pipeline(config: dict) -> list[dict]:
     view        = (PipelineView(languages, docs[0].path.name) if single
                    else MultiFileView(languages, [d.stem for d in docs], len(tasks)))
     view_lock   = threading.Lock()
-    gemini_sem  = threading.Semaphore(1)  # Gemini free tier: serialize refinement calls
     used_folders: set[Path] = set()
     scratch:     set[Path] = set()        # ficheros creados aquí, borrables si no_local
     folders_lock = threading.Lock()

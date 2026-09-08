@@ -250,3 +250,44 @@ def test_el_documento_reemplazado_es_siempre_el_mismo_con_titulos_duplicados():
             sequential_naming_pattern="{n}. {title}", replace_existing=True)
         elegidos.add(prev)
     assert elegidos == {"a"}
+
+
+# ── credenciales compartidas entre hilos ──────────────────────────────────────
+
+class CredsFalsas:
+    def __init__(self, restante_segundos, refresh_token="rt"):
+        import datetime
+        self.expiry = datetime.datetime.utcnow() + datetime.timedelta(seconds=restante_segundos)
+        self.refresh_token = refresh_token
+        self.refrescos = 0
+
+    def refresh(self, request):
+        self.refrescos += 1
+
+
+class DriveConCreds(FakeDrive):
+    def __init__(self, creds, token_path):
+        super().__init__([])
+        self.creds = creds
+        self.token_path = str(token_path)
+
+
+def test_un_token_con_margen_no_se_toca(tmp_path):
+    creds = CredsFalsas(restante_segundos=3600)
+    assert DriveConCreds(creds, tmp_path / "t.json").ensure_fresh_credentials() is False
+    assert creds.refrescos == 0
+
+
+def test_un_token_a_punto_de_caducar_se_renueva_antes_del_pool(tmp_path):
+    # Si caduca a mitad, los cuatro hilos lo refrescan a la vez sobre el mismo objeto.
+    creds = CredsFalsas(restante_segundos=60)
+    token = tmp_path / "t.json"
+    assert DriveConCreds(creds, token).ensure_fresh_credentials() is True
+    assert creds.refrescos == 1
+    assert token.exists()
+
+
+def test_sin_refresh_token_no_se_intenta(tmp_path):
+    creds = CredsFalsas(restante_segundos=10, refresh_token=None)
+    assert DriveConCreds(creds, tmp_path / "t.json").ensure_fresh_credentials() is False
+    assert creds.refrescos == 0

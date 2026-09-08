@@ -40,6 +40,7 @@ class GoogleDocsManager:
     resuelven el mismo numero.
     """
 
+    _creds_lock   = threading.Lock()
     _locks_lock   = threading.Lock()
     _locks:        dict[str, threading.Lock] = {}
     _folder_cache: dict[tuple[str, str], str] = {}
@@ -122,6 +123,32 @@ class GoogleDocsManager:
                 pickle.dump(creds, token)
 
         return creds
+
+    def ensure_fresh_credentials(self, min_remaining: int = 900) -> bool:
+        """Renueva el token si le queda poco. API: True si se ha renovado.
+
+        Las credenciales se comparten entre todos los hilos del pipeline. Si caducan a
+        mitad de la ejecución, cada hilo intenta refrescarlas por su cuenta y a la vez.
+        Renovarlas antes de arrancar el pool deja esa ventana prácticamente cerrada:
+        un token dura una hora y una ejecución dura minutos.
+        """
+        import datetime
+
+        expiry = getattr(self.creds, "expiry", None)
+        if expiry is None or not getattr(self.creds, "refresh_token", None):
+            return False
+        restante = (expiry - datetime.datetime.utcnow()).total_seconds()
+        if restante > min_remaining:
+            return False
+
+        with GoogleDocsManager._creds_lock:
+            self.creds.refresh(Request())
+            try:
+                with open(self.token_path, 'wb') as token:
+                    pickle.dump(self.creds, token)
+            except OSError:
+                pass       # renovado en memoria; el próximo arranque lo repetirá
+        return True
 
     def get_or_create_subfolder(self, parent_id: str, folder_name: str) -> str:
         key = (parent_id, folder_name.strip().lower())
