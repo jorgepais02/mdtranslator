@@ -46,6 +46,7 @@ class GoogleDocsManager:
     _folder_cache: dict[tuple[str, str], str] = {}
     _files_cache:  dict[str, list[dict]] = {}
     _reserved:     dict[str, set[str]] = {}
+    _claimed:      dict[str, set[str]] = {}
 
     @classmethod
     def _lock_for(cls, key: str) -> threading.Lock:
@@ -61,6 +62,7 @@ class GoogleDocsManager:
         cls._folder_cache.clear()
         cls._files_cache.clear()
         cls._reserved.clear()
+        cls._claimed.clear()
 
     def __init__(self, credentials_path: str = 'secrets/credentials.json', token_path: str = 'secrets/token.json', console: Console | None = None, creds=None):
         self.credentials_path = credentials_path
@@ -347,8 +349,15 @@ class GoogleDocsManager:
                     match = lambda n: n == plain
                 # Ordenado por nombre: si el mismo titulo aparece dos veces, se reemplaza
                 # siempre el mismo y no el que Drive devuelva primero esta vez.
+                claimed = GoogleDocsManager._claimed.setdefault(folder_id, set())
                 for f in sorted(self._cached_files(folder_id), key=lambda f: f['name']):
+                    # Dos tareas de la misma ejecucion no pueden reemplazar el mismo
+                    # documento: EN y EN-GB caen en la misma carpeta con el mismo titulo,
+                    # y se sobrescribian la una a la otra. La segunda crea uno nuevo.
+                    if f['id'] in claimed:
+                        continue
                     if match(f['name']):
+                        claimed.add(f['id'])
                         return f['name'], f['id']
 
             name = self._reserve_name(title, folder_id, lang, sequential_naming,

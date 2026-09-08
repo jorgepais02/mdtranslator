@@ -291,3 +291,27 @@ def test_sin_refresh_token_no_se_intenta(tmp_path):
     creds = CredsFalsas(restante_segundos=10, refresh_token=None)
     assert DriveConCreds(creds, tmp_path / "t.json").ensure_fresh_credentials() is False
     assert creds.refrescos == 0
+
+
+def test_dos_tareas_no_reemplazan_el_mismo_documento():
+    # EN y EN-GB caen en la misma carpeta con el mismo título: si las dos reclaman el
+    # mismo id, la segunda sobrescribe a la primera y una traducción se pierde.
+    g = FakeDrive([{"id": "docA", "name": "1. apuntes"}])
+    resultados = [
+        g.resolve_target("apuntes", "F", lang, sequential_naming=True,
+                         sequential_naming_pattern="{n}. {title}", replace_existing=True)
+        for lang in ("en", "en-gb")
+    ]
+    assert resultados[0] == ("1. apuntes", "docA")
+    assert resultados[1][1] is None            # la segunda crea uno nuevo
+    assert resultados[1][0] == "2. apuntes"
+
+
+def test_lo_reclamado_se_olvida_entre_ejecuciones():
+    carpeta = [{"id": "docA", "name": "1. apuntes"}]
+    for _ in range(3):
+        GoogleDocsManager.reset_run_state()
+        _, prev = FakeDrive(carpeta).resolve_target(
+            "apuntes", "F", "en", sequential_naming=True,
+            sequential_naming_pattern="{n}. {title}", replace_existing=True)
+        assert prev == "docA"

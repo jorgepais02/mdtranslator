@@ -50,3 +50,10 @@ def test_el_config_de_ejemplo_conserva_su_indentacion():
     # Reformatearlo con json.dumps (4 espacios) ya ha pasado dos veces.
     texto = (Path(__file__).resolve().parent.parent / "config.example.json").read_text()
     assert '\n  "drive"' in texto
+
+
+def test_en_y_en_gb_son_salidas_distintas(patron):
+    # Colapsar la variante regional hacía que las dos tareas escribieran el mismo
+    # fichero a la vez, y el DOCX resultante era el de quien terminara el último.
+    patron(None)
+    assert pipeline._local_stem("apuntes", "en") != pipeline._local_stem("apuntes", "en-gb")

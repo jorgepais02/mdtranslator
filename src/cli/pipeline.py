@@ -396,7 +396,11 @@ def run_pipeline(config: dict) -> list[dict]:
                 live.update(view.render())
 
         def _run_task(doc: SourceDoc, lang: str, is_source: bool) -> dict:
+            # short manda el formato del documento (RTL, CJK, plantilla); slug manda el
+            # destino. Colapsar EN y EN-GB a "en" hacía que las dos tareas escribieran el
+            # mismo fichero a la vez y subieran encima la una de la otra.
             short     = lang.lower().split("-")[0]
+            slug      = lang.lower()
             g_manager = GoogleDocsManager(console=console, creds=shared_creds) if use_google else None
 
             t_lang  = time.monotonic()
@@ -432,12 +436,12 @@ def run_pipeline(config: dict) -> list[dict]:
                 if cancelled.is_set():
                     raise KeyboardInterrupt
 
-                lang_folder = TRANSLATED_DIR / short
+                lang_folder = TRANSLATED_DIR / slug
                 lang_folder.mkdir(parents=True, exist_ok=True)
                 with folders_lock:
                     used_folders.add(lang_folder)
 
-                out_file  = lang_folder / f"{_local_stem(doc.stem, short)}.md"
+                out_file  = lang_folder / f"{_local_stem(doc.stem, slug)}.md"
                 docx_file = out_file.with_suffix(".docx")
                 pdf_file  = out_file.with_suffix(".pdf")
                 with folders_lock:
@@ -465,10 +469,10 @@ def run_pipeline(config: dict) -> list[dict]:
                     tgt = DRIVE_FOLDER_ID
                     if CONFIG.get("drive", {}).get("organize_by_language"):
                         tgt = g_manager.resolve_language_folder(
-                            tgt, short, CONFIG["drive"].get("language_folder_names"))
+                            tgt, slug, CONFIG["drive"].get("language_folder_names"))
                     drive_cfg  = CONFIG.get("drive", {})
                     name, prev = g_manager.resolve_target(
-                        title=doc.stem, folder_id=tgt, lang=short,
+                        title=doc.stem, folder_id=tgt, lang=slug,
                         sequential_naming=drive_cfg.get("sequential_naming", False),
                         sequential_naming_pattern=drive_cfg.get("sequential_naming_pattern"),
                         replace_existing=drive_cfg.get("replace_existing", False),
@@ -501,7 +505,7 @@ def run_pipeline(config: dict) -> list[dict]:
             return {
                 "lang":      lang,
                 "source":    doc.path.name,
-                "file":      f"{_local_stem(doc.stem, short)}.docx" if ok else "—",
+                "file":      f"{_local_stem(doc.stem, slug)}.docx" if ok else "—",
                 "ok":        ok,
                 "time":      elapsed,
                 "gdocs_url": url,
