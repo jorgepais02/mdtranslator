@@ -16,7 +16,7 @@ from rich.text import Text
 
 from .prompts import BACK, ask_checkbox, ask_confirm, ask_select, ask_text
 from .styles import (console, clear_screen, elide, LANGUAGES, BRIGHT, CYAN, DIM,
-                     FG, YELLOW)
+                     FG, MUTED, RED, YELLOW)
 
 from core.sources import ALL_FILES, VALID_EXTS, collect_sources, needs_formatting
 from translators.registry import AVAILABLE_TRANSLATORS, supported_by
@@ -57,19 +57,24 @@ _ETIQUETAS = (("source",    "File"),
 
 
 def _valor(clave: str, estado: dict) -> Text:
-    """Como se lee una respuesta ya dada. Blanco el dato, cian solo los idiomas."""
+    """Como se lee una respuesta ya dada. Cian solo los idiomas.
+
+    Lo ya contestado va un escalon por debajo de la pregunta viva. Con el mismo
+    blanco para las dos cosas, cuatro respuestas encima de la pregunta pesaban tanto
+    como ella y la pantalla se leia plana.
+    """
     v = estado[clave]
     if clave == "languages":
         return Text("  ".join(v), style=CYAN)
     if clave == "format":
-        return Text("format with Gemini" if v else "leave as is", style=BRIGHT)
+        return Text("format with Gemini" if v else "leave as is", style=MUTED)
     if clave == "source" and v == ALL_FILES:
         ficheros = estado.get("files") or []
-        t = Text(f"all {len(ficheros)} files", style=BRIGHT)
+        t = Text(f"all {len(ficheros)} files", style=MUTED)
         if ficheros:
             t.append("  " + "  ".join(ficheros), style=DIM)
         return t
-    return Text(str(v), style=BRIGHT)
+    return Text(str(v), style=MUTED)
 
 
 def _resumen(estado: dict) -> Table:
@@ -86,6 +91,32 @@ def _resumen(estado: dict) -> Table:
         if clave in estado:
             tabla.add_row(etiqueta, _valor(clave, estado))
     return tabla
+
+
+def _paso(estado: dict) -> str:
+    """Etiqueta del filete: "step 3 of 5". API: cadena, vacia si no se sabe todavia.
+
+    Las preguntas no son siempre las mismas: la fuente no se pregunta si vino por
+    argumento, y el formateo solo si hay algun .txt entre lo elegido. Por eso el total
+    se calcula sobre las que de verdad aplican, y no se ensena hasta que se sabe cual
+    es —antes de elegir fichero no hay manera de saber si habra que preguntar por el
+    formateo, y un "of 5" que luego pasa a "of 4" se lee como un fallo.
+    """
+    if estado.get("_selected") is None:
+        return ""
+    aplican = [p for p in _PASOS if _aplica(p, estado)]
+    actual = estado.get("_paso_actual")
+    if actual not in aplican:
+        return ""
+    return f"step {aplican.index(actual) + 1} of {len(aplican)}"
+
+
+def _aplica(paso, estado: dict) -> bool:
+    if paso is _paso_source:
+        return not estado.get("_preselected")
+    if paso is _paso_format:
+        return any(needs_formatting(p) for p in estado["_selected"])
+    return True
 
 
 def _pintar(estado: dict) -> None:
@@ -118,7 +149,7 @@ def _paso_source(estado: dict, volver: bool):
                                if f.is_file() and f.suffix.lower() in VALID_EXTS))
 
     r = ask_select("Select source file", _opciones(opciones),
-                   default=estado.get("_ultimo_source"), back=volver)
+                   default=estado.get("_ultimo_source"), back=volver, paso=_paso(estado))
     if r is None or r is BACK:
         return r
 
@@ -172,7 +203,7 @@ def _paso_provider(estado: dict, volver: bool):
                                                disabled="no API key in .env"))
 
     r = ask_select("Choose translation provider", opciones,
-                   default=estado.get("_ultimo_provider"), back=volver)
+                   default=estado.get("_ultimo_provider"), back=volver, paso=_paso(estado))
     if r is None or r is BACK:
         return r
     estado["_provider_id"] = estado["_ultimo_provider"] = r
@@ -185,7 +216,7 @@ def _paso_output(estado: dict, volver: bool):
     _pintar(estado)
     opciones = ["Google Drive", "Local only", "Local + Google Drive"]
     r = ask_select("Output destination", opciones,
-                   default=estado.get("_ultimo_output"), back=volver)
+                   default=estado.get("_ultimo_output"), back=volver, paso=_paso(estado))
     if r is None or r is BACK:
         return r
     estado["output"] = estado["_ultimo_output"] = r
@@ -225,7 +256,7 @@ def _paso_languages(estado: dict, volver: bool):
     opciones.append(questionary.Choice(title="Other code…  (EN-GB, PT-BR, …)",
                                        value=_OTRO, checked=False))
 
-    r = ask_checkbox("Target languages", opciones, back=volver)
+    r = ask_checkbox("Target languages", opciones, back=volver, paso=_paso(estado))
     if r is None or r is BACK:
         return r
 
@@ -274,12 +305,13 @@ def run_wizard(preselected_source: str = None, previo: dict | None = None) -> di
     if preselected_source:
         seleccion = collect_sources(Path(preselected_source).name, estado["_dir"])
         if not seleccion:
-            console.print(f"[red]✗ No source files found for: {preselected_source}[/red]")
+            console.print(f"[{RED}]✗ No source files found for: {preselected_source}[/{RED}]")
             return None
         estado["_selected"] = seleccion
 
     i, direccion = 0, 1
     while i < len(_PASOS):
+        estado["_paso_actual"] = _PASOS[i]
         r = _PASOS[i](estado, volver=i > 0)
         if r is None:
             return None

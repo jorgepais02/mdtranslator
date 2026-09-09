@@ -15,7 +15,7 @@ from .confirmation import show_confirmation
 from .pipeline import run_pipeline
 from .results import show_results
 from .styles import LANGUAGES
-from .styles import console, clear_screen
+from .styles import console, clear_screen, RED, YELLOW
 from .folder_picker import run_set_folder, pick_drive_folder, save_folder_id
 from core.sources import ALL_FILES, collect_sources
 from core.config import DRIVE_FOLDER_ID
@@ -104,7 +104,7 @@ def _ensure_drive_folder(config, interactive: bool) -> None:
     if not interactive:
         print("error: no Drive folder configured — run with --set-folder first", file=sys.stderr)
         sys.exit(2)
-    console.print("\n[yellow]No hay ninguna carpeta de Drive configurada.[/yellow]")
+    console.print(f"\n[{YELLOW}]No hay ninguna carpeta de Drive configurada.[/{YELLOW}]")
     folder_id = pick_drive_folder()
     if not folder_id:
         _abort()
@@ -162,7 +162,7 @@ def _run(args):
         if args.json:
             print(json.dumps({"status": "error", "error": str(e), "files": []}))
             sys.exit(2)
-        console.print(f"\n[#dc3b3b]✗ Pipeline failed: {e}[/#dc3b3b]\n")
+        console.print(f"\n[{RED}]✗ Pipeline failed: {e}[/{RED}]\n")
         sys.exit(2)
 
     total_time = time.monotonic() - start

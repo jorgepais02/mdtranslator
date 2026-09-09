@@ -4,7 +4,7 @@ from rich.console import Group
 from rich.columns import Columns
 from rich.rule import Rule
 from rich import box
-from .styles import console, GREEN, BLUE, CYAN, DIM, BRIGHT, FG, YELLOW
+from .styles import console, GREEN, BLUE, CYAN, DIM, BRIGHT, FG, RED, YELLOW
 
 def _short_warning(msg: str) -> str:
     msg = str(msg)
@@ -76,7 +76,9 @@ def show_results(results: list[dict], total_time: float, version: str = "2.1.0")
     multi = len({r.get("source") for r in results if r.get("source")}) > 1
 
     # ── Results table ─────────────────────────────────────────────────
-    parts.append(Text("Results", style=f"bold {BLUE}"))
+    # Los titulos van en blanco y no en azul: en esta pantalla no hay cursor, y el
+    # azul competia con la columna de ✓, que es lo unico que se viene a mirar aqui.
+    parts.append(Text("Results", style=f"bold {BRIGHT}"))
 
     file_table = Table(
         show_edge=True,
@@ -96,7 +98,7 @@ def show_results(results: list[dict], total_time: float, version: str = "2.1.0")
     file_table.add_column("TIME",   style=DIM, justify="right", width=7, no_wrap=True)
 
     for r in results:
-        status = Text("✓", style=GREEN) if r["ok"] else Text("✗", style="#e05555")
+        status = Text("✓", style=GREEN) if r["ok"] else Text("✗", style=RED)
         row = [r["lang"]]
         if multi:
             row.append(r.get("source", "—"))
@@ -108,7 +110,7 @@ def show_results(results: list[dict], total_time: float, version: str = "2.1.0")
 
     # ── Google Docs table ─────────────────────────────────────────────
     if any(r.get("gdocs_url") for r in results):
-        parts.append(Text("Google Docs", style=f"bold {BLUE}"))
+        parts.append(Text("Google Docs", style=f"bold {BRIGHT}"))
 
         gdocs_table = Table(
             show_edge=True,
@@ -168,7 +170,7 @@ def show_results(results: list[dict], total_time: float, version: str = "2.1.0")
         ok_count = sum(1 for r in results if r["ok"])
         footer_left.append(
             f"⚠ Completed with errors ({ok_count}/{len(results)}) in {total_time:.1f}s",
-            style="bold yellow",
+            style=f"bold {YELLOW}",
         )
     else:
         footer_left.append(f"✓ Completed in {total_time:.1f}s", style=f"bold {GREEN}")

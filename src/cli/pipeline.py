@@ -1,17 +1,20 @@
 from rich.live import Live
 from rich.console import Group
 from rich.text import Text
+import math
 import time
 import shutil
 import threading
+from functools import lru_cache
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from langdetect import detect_langs as _detect_langs, DetectorFactory as _LDF
 _LDF.seed = 0
 from .styles import (console, elide as _elide, status_style as _status_style,
-                     STATUS_QUEUED, GREEN, BLUE, YELLOW, RED, CYAN, DIM,
-                     BRIGHT, FG, needs_refine)
+                     STATUS_QUEUED, GREEN, BLUE, YELLOW, RED, CYAN, DIM, MUTED,
+                     BRIGHT, FG, mezcla, TERM_BG, BAR_TINT, BAR_BODY, BAR_RAIL,
+                     needs_refine)
 
 from translators import get_translator
 from translators.base import call_translate
@@ -46,14 +49,105 @@ def _ancho() -> int:
     return max(_MIN_WIDTH, console.width)
 
 
-def _bar(pct: float, ancho: int, style: str, sufijo: str = "") -> Text:
-    """Barra de progreso del ancho que quepa. Estaba fija a 40 y se partia en dos."""
-    lleno = int(round((pct / 100) * ancho))
-    # Una barra llena de una tarea que sigue en marcha se lee como terminada. Solo se
-    # llena del todo al 100% de verdad; el redondeo cede el ultimo bloque.
-    if pct < 100:
-        lleno = min(lleno, ancho - 1)
-    return Text(" " + "█" * lleno + "░" * (ancho - lleno) + sufijo, style=style)
+# Lo hecho lo pinta el fondo de las celdas, no un glifo repetido: una superficie y no
+# una trama. La fraccion tambien va pintada, y ese es el motivo de que no quede ni un
+# bloque en la barra: el fondo cubre la celda entera y un bloque solo la caja de la
+# fuente, asi que un ▉ en la ultima celda ensena el fondo por encima y por debajo y
+# sale mellado. Pintada, el borde delantero se mueve por color en vez de por
+# geometria y conserva la misma resolucion sin la muesca.
+_BAR_FRENTE = 6      # celdas de degradado pegadas a la cabeza; el resto es cuerpo
+_BAR_CURVA  = 1.6    # cuanto se retrasa la subida del brillo hacia la cabeza
+# El degradado va pegado al frente y mide siempre lo mismo, no se estira al relleno.
+# Estirado, la velocidad a la que cambia el brillo dependia de lo llena que estuviera
+# la barra —al 5% cabia entero en una celda— y ademas eran 22 colores distintos por
+# barra que rich no puede agrupar en un solo tramo.
+
+
+@lru_cache(maxsize=None)
+def _tono(d: int) -> str:
+    """Color de la celda que esta a `d` celdas de la cabeza."""
+    if d >= _BAR_FRENTE:
+        return BAR_BODY
+    return mezcla(BAR_BODY, BAR_TINT, (1 - d / _BAR_FRENTE) ** _BAR_CURVA)
+
+
+@lru_cache(maxsize=None)
+def _tono_frac(paso: int) -> str:
+    """Color de la celda del frente, del fondo a la cabeza. `paso` va de 0 a 32."""
+    return mezcla(TERM_BG, _tono(0), paso / 32)
+
+
+# Lo que queda va con un filete, no con fondo pintado: cinco railes de fondo pegados
+# uno debajo de otro se funden en un unico rectangulo, porque entre renglones de un
+# terminal no hay separacion ninguna. Un filete no se puede fundir. Y va a media
+# altura y no en la base (▁): apoyado abajo, el filete de una fila queda pegado a la
+# siguiente y se lee como si fuera suyo.
+_BAR_RAIL_GLIFO = "─"
+
+
+# El latido va por luz y no por tamano. Por tamano habria que encoger la celda de
+# cabeza, que es justo la que lleva la fraccion: las dos cosas compartirian alfabeto
+# de anchuras y se verian como un pellizco cada vez que coinciden.
+_BEAT_PERIODO = 1.6      # segundos por latido
+_BEAT_SUELO   = 0.80     # lo mas apagada que llega la cabeza
+
+
+def _pulso(ahora: float) -> float:
+    """Fase del latido, de 0 a 1. Solo lo llevan las filas vivas."""
+    return 0.5 + 0.5 * math.sin(2 * math.pi * ahora / _BEAT_PERIODO)
+
+
+def _bar(pct: float, ancho: int, *, apagada: bool = False,
+         pulso: float | None = None) -> Text:
+    """Barra de progreso del ancho que quepa. Estaba fija a 40 y se partia en dos.
+
+    API: (porcentaje ya suavizado, columnas, apagada=fila terminada, pulso=latido).
+    Devuelve un Text de `ancho` + 1 columnas: la primera es el aire que la separa
+    del nombre de la fila.
+    """
+    barra = Text(" ")
+    if ancho <= 0:
+        return barra
+    if apagada:
+        # Una fila terminada no tiene nada que contar: cinco barras llenas de color
+        # al final de la ejecucion son media pantalla diciendo lo mismo que el ✓.
+        barra.append(_BAR_RAIL_GLIFO * ancho, style=BAR_RAIL)
+        return barra
+
+    exacto = max(0.0, min(100.0, pct)) / 100 * ancho
+    llenas = int(exacto)
+    fr     = exacto - llenas
+    # Una barra llena de una tarea que sigue en marcha se lee como terminada, y una
+    # fila ya terminada a la que le falta una celda se lee como que le queda algo.
+    # Son la misma regla vista por sus dos caras.
+    if pct >= 100:
+        llenas, fr = ancho, 0.0
+    elif llenas >= ancho:
+        llenas, fr = ancho - 1, 0.999
+
+    # Las celdas del mismo color van en un solo append: rich manda una secuencia de
+    # escape por tramo, no por celda, y agrupar el cuerpo deja la barra en nueve
+    # tramos en vez de veintidos. A veinte fotogramas y cinco filas es la diferencia
+    # entre 4 KB/s y 42 KB/s por la tuberia del terminal, que en local da igual y por
+    # ssh no.
+    cuerpo = max(0, llenas - _BAR_FRENTE)
+    if cuerpo:
+        barra.append(" " * cuerpo, style=f"on {BAR_BODY}")
+    for d in range(min(llenas, _BAR_FRENTE) - 1, -1, -1):
+        if d == 0 and pulso is not None:
+            color = mezcla(BAR_BODY, BAR_TINT,
+                           _BEAT_SUELO + (1 - _BEAT_SUELO) * pulso)
+        else:
+            color = _tono(d)
+        barra.append(" ", style=f"on {color}")
+    if llenas < ancho:
+        # La celda del frente lleva el filete y ademas el fondo a medio encender, para
+        # que el borde se mueva dentro de la celda en vez de saltar de una a otra.
+        paso = round(fr * 32)
+        barra.append(_BAR_RAIL_GLIFO,
+                     style=f"{BAR_RAIL} on {_tono_frac(paso)}" if paso else BAR_RAIL)
+        barra.append(_BAR_RAIL_GLIFO * (ancho - llenas - 1), style=BAR_RAIL)
+    return barra
 
 
 def _cabecera(izquierda: str, languages: list[str], ancho: int) -> Text:
@@ -103,9 +197,15 @@ _FASES = {
     "refining…":    0.60,
     "uploading…":   0.85,
 }
+# Suavizado de la barra: cuanto se acerca por segundo al valor real, y a que
+# distancia se considera que ya ha llegado.
+_V_PERSECUCION = 7.0
+_V_BANDA       = 0.35
 # La barra tiene tope: estirada a 100 columnas deja de leerse como una barra y el
 # ojo pierde el salto entre lleno y vacio. Lo que sobra a la derecha se queda vacio.
-_MAX_BAR    = 28
+# Bajo de 28 a 22 al pasar a pintarla con color de fondo: la misma anchura pesa mas
+# como superficie maciza que como trama de caracteres.
+_MAX_BAR    = 22
 _TIEMPO_COL = 6
 
 
@@ -120,6 +220,24 @@ class Track:
     started:  float | None = None
     finished: float | None = None
     fallos:   int = 0
+    pintada:  float = 0.0             # lo que se dibuja; persigue a pct, no salta
+
+    def avanzar(self, dt: float) -> None:
+        """Acerca la barra dibujada a su valor real. Persecucion exponencial.
+
+        `pct` se mueve entre cuatro paradas por fila —las fases de _FASES— y da igual
+        a cuantos fotogramas por segundo se repinte: lo que salta es el valor, no la
+        pantalla. Moviendo el valor dibujado hacia el real, el salto se convierte en
+        un recorrido, y `pct` se queda intacto para quien lo lea.
+
+        La banda muerta no es un detalle: la persecucion es asintotica y nunca llega,
+        asi que sin ella una fila terminada se queda en 99,9%, la barra se pinta a
+        falta de una celda y contradice al ✓ que tiene al lado.
+        """
+        objetivo = self.pct
+        self.pintada += (objetivo - self.pintada) * (1 - math.exp(-_V_PERSECUCION * dt))
+        if abs(objetivo - self.pintada) < _V_BANDA:
+            self.pintada = objetivo
 
     @property
     def pct(self) -> float:
@@ -173,6 +291,7 @@ class ProgressView:
         self.completed    = 0
         self.failed       = 0
         self.started      = time.monotonic()
+        self._ultimo      = self.started      # cuando se pinto por ultima vez
 
     # ── entradas ──────────────────────────────────────────────────────────────
 
@@ -272,7 +391,9 @@ class ProgressView:
         estilo = _status_style(t.status)
         linea = Text()
         linea.append("  " + _elide(t.key, nombre).ljust(nombre), style=BRIGHT)
-        linea.append_text(_bar(t.pct, barra, estilo))
+        linea.append_text(_bar(t.pintada, barra,
+                               apagada=t.finished is not None,
+                               pulso=_pulso(ahora) if t.viva else None))
         linea.append(" ")
         if estado:
             # El detalle (el idioma en curso) es lo primero que se cae si no cabe:
@@ -289,6 +410,12 @@ class ProgressView:
     def render(self) -> Group:
         ancho = _ancho()
         ahora = time.monotonic()
+        # Todas, no solo las visibles: una fila que estaba fuera de pantalla y vuelve
+        # a entrar tiene que traer su barra donde toca, no arrancar el suavizado
+        # desde donde se quedo la ultima vez que se vio.
+        dt, self._ultimo = ahora - self._ultimo, ahora
+        for t in self.tracks.values():
+            t.avanzar(dt)
         nombre, barra, estado, bloque = self._medidas(ancho)
 
         partes: list = []
@@ -492,7 +619,11 @@ def run_pipeline(config: dict) -> list[dict]:
     console.print()
     console.print()
 
-    with Live(_Vivo(view), console=console, refresh_per_second=4) as live:
+    # Cuatro refrescos por segundo dejan 250 ms entre fotogramas: a esa cadencia
+    # cualquier suavizado se ve como una sucesion de posiciones, no como movimiento.
+    # A veinte quedan 50 ms y el ojo lo cierra. No cuesta nada porque rich solo manda
+    # las lineas que han cambiado, que son ocho.
+    with Live(_Vivo(view), console=console, refresh_per_second=20) as live:
 
         def _update(doc: SourceDoc, lang: str, is_source: bool,
                     status: str, elapsed: float | None = None) -> None:

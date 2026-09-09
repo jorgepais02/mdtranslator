@@ -80,10 +80,13 @@ def test_el_resumen_solo_ensena_lo_ya_contestado(a_ancho):
     assert "apuntes.md" in texto and "Provider" not in texto
 
 
-def test_los_idiomas_van_en_cian_y_el_resto_en_blanco():
-    from cli.styles import BRIGHT, CYAN
+def test_los_idiomas_van_en_cian_y_el_resto_un_escalon_por_debajo():
+    # Lo ya contestado no compite con la pregunta viva: el resumen baja a MUTED y el
+    # blanco se queda para lo que responde a la pregunta que está en pantalla.
+    from cli.styles import BRIGHT, CYAN, MUTED
     assert wizard._valor("languages", _estado()).style == CYAN
-    assert wizard._valor("output", _estado()).style == BRIGHT
+    assert wizard._valor("output", _estado()).style == MUTED
+    assert MUTED != BRIGHT
 
 
 def test_el_verde_ya_no_marca_la_respuesta(a_ancho):

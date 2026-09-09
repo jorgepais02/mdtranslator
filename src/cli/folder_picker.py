@@ -17,7 +17,7 @@ from pathlib import Path
 import questionary
 
 from .prompts import ask_select, ask_text
-from .styles import console, elide, BRIGHT, CYAN, DIM, FG, GREEN
+from .styles import console, elide, BRIGHT, CYAN, DIM, FG, GREEN, RED, YELLOW
 
 from core.config import PROJECT_ROOT
 
@@ -83,7 +83,7 @@ def pick_drive_folder(manager=None) -> str | None:
         try:
             subs = g.list_subfolders(current)
         except Exception as e:
-            console.print(f"[red]✗ No se pudo leer la carpeta: {e}[/red]")
+            console.print(f"[{RED}]✗ No se pudo leer la carpeta: {e}[/{RED}]")
             return None
 
         # El nombre se recorta: questionary parte en dos lineas las opciones largas
@@ -126,12 +126,12 @@ def pick_drive_folder(manager=None) -> str | None:
             pasted = ask_text("Pega la URL (o el ID) de la carpeta")
             folder_id = extract_folder_id(pasted or "")
             if not folder_id:
-                console.print("[yellow]⚠ No he reconocido ninguna carpeta en eso.[/yellow]")
+                console.print(f"[{YELLOW}]⚠ No he reconocido ninguna carpeta en eso.[/{YELLOW}]")
                 continue
             try:
                 info = g.get_folder_info(folder_id)
             except Exception as e:
-                console.print(f"[red]✗ No puedo acceder a esa carpeta: {e}[/red]")
+                console.print(f"[{RED}]✗ No puedo acceder a esa carpeta: {e}[/{RED}]")
                 continue
             console.print(f"[{GREEN}]✓[/{GREEN}] [{DIM}]Carpeta seleccionada:[/{DIM}] "
                           f"[{BRIGHT}]{elide(info['name'], max(16, console.width - 26))}[/{BRIGHT}]")

@@ -6,7 +6,8 @@ import pytest
 from rich.console import Console
 
 from cli import pipeline
-from cli.pipeline import ProgressView, _bar, _cabecera, _elide
+from cli.pipeline import ProgressView, Track, _bar, _cabecera, _elide
+from cli.styles import BAR_RAIL, BAR_TINT
 
 IDIOMAS_4  = ["EN", "FR", "AR", "ZH"]
 IDIOMAS_14 = ["EN", "FR", "DE", "IT", "PT", "RU", "JA", "KO",
@@ -46,21 +47,77 @@ def test_elide_no_toca_lo_que_cabe():
     assert _elide("abc", 10) == "abc"
 
 
+# La barra ya no dibuja glifos: son celdas en blanco con color de fondo, así que lo
+# que hay que mirar es el color de cada celda y no qué carácter lleva.
+RAIL = BAR_RAIL                      # lo que queda es un filete, no un fondo
+CABEZA = f"on {BAR_TINT}"
+
+
+def _celdas(barra):
+    """Color de fondo de cada celda, saltando la sangría inicial."""
+    fondos = []
+    for i in range(1, len(barra.plain)):
+        estilo = ""
+        for span in barra.spans:
+            if span.start <= i < span.end:
+                estilo = str(span.style)
+        fondos.append(estilo)
+    return fondos
+
+
 @pytest.mark.parametrize("ancho", [12, 20, 40])
 def test_la_barra_mide_lo_que_se_le_pide(ancho):
     # Estaba fija a 40 caracteres y en un terminal estrecho caía a la línea siguiente.
-    assert len(_bar(50, ancho, "white").plain) == ancho + 1      # +1 por la sangría
+    assert len(_bar(50, ancho).plain) == ancho + 1               # +1 por la sangría
+    assert len(_celdas(_bar(50, ancho))) == ancho
 
 
 def test_la_barra_refleja_el_porcentaje():
-    assert _bar(25, 40, "white").plain.count("█") == 10
-    assert _bar(0, 40, "white").plain.count("█") == 0
-    assert _bar(100, 40, "white").plain.count("░") == 0
+    assert sum(c != RAIL for c in _celdas(_bar(25, 40))) == 10
+    assert sum(c != RAIL for c in _celdas(_bar(0, 40))) == 0
+    assert sum(c == RAIL for c in _celdas(_bar(100, 40))) == 0
 
 
 def test_una_barra_casi_llena_no_se_pinta_llena():
     # Una fila que sigue subiendo con la barra al 100% se lee como terminada.
-    assert _bar(99.9, 20, "white").plain.count("░") == 1
+    assert _celdas(_bar(99.9, 20))[-1] != CABEZA
+    assert _celdas(_bar(100, 20))[-1] == CABEZA
+
+
+def test_una_fila_terminada_llega_a_pintarse_llena():
+    # La persecución exponencial es asintótica y nunca llega. Sin banda muerta la
+    # fila se quedaba en 99,9%, la barra pintaba a falta de una celda y contradecía
+    # al ✓ que tiene al lado.
+    t = Track("EN", total=1, hechas=1)
+    for _ in range(40):                       # dos segundos a veinte fotogramas
+        t.avanzar(0.05)
+    assert t.pintada == 100.0
+    assert _celdas(_bar(t.pintada, 20))[-1] == CABEZA
+
+
+def test_la_barra_no_salta_de_golpe_al_valor_nuevo():
+    # V1: lo que se dibuja persigue a pct, así que un salto de fase se recorre.
+    t = Track("EN", total=1, hechas=1)
+    t.avanzar(0.05)
+    assert 0 < t.pintada < 100
+
+
+def test_una_fila_terminada_apaga_la_barra():
+    # Cinco barras llenas de color al acabar son media pantalla repitiendo lo que ya
+    # dice el ✓. Al terminar, la fila devuelve la barra al raíl.
+    assert set(_celdas(_bar(100, 20, apagada=True))) == {RAIL}
+
+
+def test_el_rail_no_pinta_fondo():
+    # Pintado de fondo, los raíles de las cinco filas se funden en un rectángulo:
+    # entre renglones de un terminal no hay separación que los corte.
+    assert all("on " not in c for c in _celdas(_bar(0, 20)))
+
+
+def test_el_latido_solo_toca_la_celda_de_cabeza():
+    apagado = _celdas(_bar(50, 20, pulso=0.0))
+    encendido = _celdas(_bar(50, 20, pulso=1.0))
+    assert sum(a != b for a, b in zip(apagado, encendido)) == 1
 
 
 def test_la_cabecera_recorta_los_idiomas_antes_que_envolver():
