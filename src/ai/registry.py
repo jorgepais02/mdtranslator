@@ -25,9 +25,17 @@ from .openai_compat import OpenAICompatModel
 # Los proveedores gratuitos que se manejan hoy. El "signup" es la pagina donde se saca
 # la clave: lo consume la pantalla de alta, que va en la tanda siguiente.
 #
-# Los "default_model" de Groq y Cerebras no estan comprobados contra su API (hacen
-# falta claves, y aqui no hay): si un id ha caducado, la API responde 404, el fallback
-# pasa al siguiente y `python -m src.ai.registry --check` dice cuales acepta de verdad.
+# "free" y "label" se pintan tal cual (la tabla de --check, y luego esa pantalla), asi
+# que van en ingles como el resto de la interfaz. Y el numero de Gemini es el **medido**
+# en el 429 —limit: 20 al dia por modelo—, no el que publica la pagina: prometer 1.500
+# y cortar a las 20 es peor que no decir nada.
+#
+# El de Groq esta comprobado contra su API con una clave del free tier (18-09-2026): de
+# sus 13 modelos, los que refinan son openai/gpt-oss-120b, openai/gpt-oss-20b y
+# qwen/qwen3.8-27b —el resto son Whisper, clasificadores de prompts y TTS—, y el que
+# estaba puesto de memoria, llama-3.3-70b-versatile, **no esta**. El de Cerebras sigue
+# sin comprobar: si un id ha caducado la API responde 404, el fallback pasa al siguiente
+# y `python -m src.ai.registry --check` dice cuales acepta de verdad.
 AVAILABLE_MODELS: dict[str, dict] = {
     "gemini": {
         "label":         "Gemini (Google AI)",
@@ -35,16 +43,16 @@ AVAILABLE_MODELS: dict[str, dict] = {
         "key_env":       "GEMINI_API_KEY",
         "default_model": GEMINI_DEFAULT,
         "signup":        "https://aistudio.google.com/apikey",
-        "free":          "1.500 peticiones/dia por modelo",
+        "free":          "20 requests/day per model (measured)",
         "kwargs":        {},
     },
     "groq": {
         "label":         "Groq",
         "cls":           OpenAICompatModel,
         "key_env":       "GROQ_API_KEY",
-        "default_model": "llama-3.3-70b-versatile",
+        "default_model": "openai/gpt-oss-120b",
         "signup":        "https://console.groq.com/keys",
-        "free":          "1.000 peticiones/dia, 30/min",
+        "free":          "1,000 requests/day, 30/min",
         "kwargs":        {"base_url": "https://api.groq.com/openai/v1"},
     },
     "cerebras": {
@@ -53,7 +61,7 @@ AVAILABLE_MODELS: dict[str, dict] = {
         "key_env":       "CEREBRAS_API_KEY",
         "default_model": "llama-3.3-70b",
         "signup":        "https://cloud.cerebras.ai/platform/apikeys",
-        "free":          "1M tokens/dia, 30/min",
+        "free":          "1M tokens/day, 30/min",
         "kwargs":        {"base_url": "https://api.cerebras.ai/v1"},
     },
 }

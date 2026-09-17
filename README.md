@@ -90,15 +90,29 @@ python -m src.cli.main --lang EN FR AR ZH --provider deepl
 
 Configura en `.env` las claves de los proveedores que quieras usar. El sistema detecta automáticamente cuáles están disponibles y construye el fallback en orden.
 
-| Variable                  | Proveedor               |
-|---------------------------|-------------------------|
-| `DEEPL_API_KEY`           | DeepL API               |
-| `AZURE_TRANSLATOR_KEY`    | Azure AI Translator     |
-| `AZURE_TRANSLATOR_REGION` | Azure AI Translator     |
-| `GEMINI_API_KEY`          | Gemini (Google AI)      |
-| `GOOGLE_DRIVE_FOLDER_ID`  | Google Drive (opcional) |
+La forma corta es dejar que lo pregunte: abre la página del proveedor, comprueba la clave contra su API y la escribe en `.env`.
+
+```bash
+./run_pipeline.sh --add-key            # pregunta de quién
+./run_pipeline.sh --add-key groq       # esa, sin preguntar
+```
+
+| Variable                  | Proveedor               | Para                     |
+|---------------------------|-------------------------|--------------------------|
+| `DEEPL_API_KEY`           | DeepL API               | traducir                 |
+| `AZURE_TRANSLATOR_KEY`    | Azure AI Translator     | traducir                 |
+| `AZURE_TRANSLATOR_REGION` | Azure AI Translator     | traducir (va con la clave) |
+| `GEMINI_API_KEY`          | Gemini (Google AI)      | traducir y refinar       |
+| `GROQ_API_KEY`            | Groq                    | refinar y formatear      |
+| `CEREBRAS_API_KEY`        | Cerebras                | refinar y formatear      |
+| `GOOGLE_DRIVE_FOLDER_ID`  | Google Drive (opcional) | subir                    |
 
 Con un solo proveedor el sistema funciona. Con varios, activa el fallback automático si uno falla.
+
+El refinado y el formateo tienen su propia cadena, y su unidad es `proveedor:modelo` —
+la cuota gratuita de Gemini se cuenta por modelo, no por cuenta. Se escribe en
+`config.json` → `ai.fallback_order`, y `python -m src.ai.registry --check` dice qué ids
+acepta hoy cada API.
 
 ## Configuración de Google Drive (Opcional)
 

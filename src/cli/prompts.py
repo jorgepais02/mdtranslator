@@ -10,6 +10,9 @@ API:
     ask_text(label, default="", validate=None, back=False)  -> str   | BACK | None
     ask_checkbox(label, choices, back=False)                -> list  | BACK | None
 
+Sin terminal (stdin no es un tty) las cuatro lanzan CLIError en vez de dejar que
+prompt_toolkit suelte su traza.
+
 El titulo de la pregunta y el filete que lo cierra los pinta rich, y a questionary se
 le pasa un mensaje vacio. No es un rodeo: questionary tiene una unica clase
 `separator` para todo lo que no es una opcion, y el filete (#33364a) y los subtitulos
@@ -17,11 +20,14 @@ le pasa un mensaje vacio. No es un rodeo: questionary tiene una unica clase
 paso, la linea vacia del mensaje es justo el aire que va entre el filete y la lista.
 """
 
+import sys
+
 import questionary
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
 from rich.text import Text
 
+from .errors import CLIError
 from .styles import console, MARGEN, META, RULE, TITLE, WIZARD_STYLE
 
 # questionary trae "?" y "»" por defecto. El "?" se quita del todo: en una pantalla
@@ -203,6 +209,29 @@ def _subtitulo_vivo(question, subtitulos: dict[int, str], aire: bool) -> None:
     control.text = con_subtitulo
 
 
+_SIN_TERMINAL = (
+    "✗ These questions need a real terminal\n"
+    "  stdin is not a tty, so prompt_toolkit cannot read the keys. Run the same "
+    "command in a terminal window, or pass the answers as flags (--help)."
+)
+
+
+def _exige_terminal() -> None:
+    """Falla con un mensaje nuestro si no hay tty. API: nada, o CLIError.
+
+    prompt_toolkit necesita un terminal para leer las teclas: sin el suelta un
+    EOFError con veinte lineas de traza —lo dio el `!` de un cliente que no abre
+    pty— y una traza no es una pantalla. Se mira en las cuatro preguntas y no
+    dentro de `_ask`, que en las listas ya tiene el titulo pintado encima.
+    """
+    try:
+        if sys.stdin.isatty():
+            return
+    except ValueError:
+        pass                      # stdin cerrado: tampoco hay donde preguntar
+    raise CLIError(_SIN_TERMINAL, exit_code=2)
+
+
 def _ask(question, back: bool, cuando=None):
     if back:
         _bind_back(question, cuando)
@@ -213,6 +242,7 @@ def _ask(question, back: bool, cuando=None):
 
 
 def ask_select(label: str, choices: list, default=None, back: bool = False):
+    _exige_terminal()
     _cabecera(label, _HINT_BACK if back else "")
     opciones, subtitulos, aire = _desplegar(choices)
     q = questionary.select(
@@ -225,6 +255,7 @@ def ask_select(label: str, choices: list, default=None, back: bool = False):
 
 
 def ask_confirm(label: str, default: bool = True, back: bool = False):
+    _exige_terminal()
     # Sin filete: no hay lista debajo que separar, y una raya con nada detras se lee
     # como que falta algo.
     q = questionary.confirm(
@@ -236,6 +267,7 @@ def ask_confirm(label: str, default: bool = True, back: bool = False):
 
 
 def ask_text(label: str, default: str = "", validate=None, back: bool = False):
+    _exige_terminal()
     q = questionary.text(
         label, qmark=_QMARK, default=default, style=WIZARD_STYLE, validate=validate,
         instruction=_HINT_TEXT if back else "",
@@ -248,6 +280,7 @@ def ask_text(label: str, default: str = "", validate=None, back: bool = False):
 
 
 def ask_checkbox(label: str, choices: list, back: bool = False):
+    _exige_terminal()
     _cabecera(label, _HINT_MULTI if back else "space")
     opciones, subtitulos, aire = _desplegar(choices)
     q = questionary.checkbox(

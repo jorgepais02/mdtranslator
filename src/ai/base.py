@@ -157,6 +157,17 @@ class FallbackModel(AIModel):
     def ref(self) -> str:
         return self._usado.ref
 
+    @staticmethod
+    def _con_ref(m: AIModel, e: Exception) -> str:
+        """El fallo con el modelo delante, pero solo si no lo trae ya.
+
+        Los adaptadores escriben su ref en el mensaje, asi que anadirla aqui salia
+        doble: "gemini:no-existe: gemini:no-existe: 404 NOT_FOUND". Se sigue anadiendo
+        cuando falta, porque aqui tambien cae el error pelado de un adaptador roto.
+        """
+        texto = str(e)
+        return texto if texto.startswith(f"{m.ref}:") else f"{m.ref}: {texto}"
+
     def complete(self, prompt: str, system: str = "", temperature: float = 0.2) -> str:
         fallos: list[tuple[AIModel, Exception]] = []
         for m in self.modelos:
@@ -171,7 +182,7 @@ class FallbackModel(AIModel):
             return salida
 
         de_cuota = [(m, e) for m, e in fallos if es_cuota(e)]
-        detalle  = "\n  ".join(f"{m.ref}: {e}" for m, e in fallos)
+        detalle  = "\n  ".join(self._con_ref(m, e) for m, e in fallos)
         if len(de_cuota) == len(fallos):
             # La espera es la mas corta de las que piden: es cuando la lista entera
             # vuelve a tener sentido, no cuando la tiene el ultimo.
@@ -182,7 +193,7 @@ class FallbackModel(AIModel):
             )
         # Mixto: el aviso no puede llevar la marca de cuota, o un 503 cortaria el
         # refinamiento del resto de la ejecucion. Los de cuota se cuentan, no se citan.
-        sueltos = [f"{m.ref}: {e}" for m, e in fallos if not es_cuota(e)]
+        sueltos = [self._con_ref(m, e) for m, e in fallos if not es_cuota(e)]
         if de_cuota:
             sueltos.append(f"and {len(de_cuota)} more with no quota left")
         raise AIError(sin_pistas_de_cuota("no AI model answered:\n  " + "\n  ".join(sueltos)))

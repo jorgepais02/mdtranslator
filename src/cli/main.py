@@ -15,10 +15,12 @@ from .wizard import run_wizard
 from .confirmation import show_confirmation
 from .pipeline import run_pipeline
 from .results import show_results
+from .errors import CLIError
 from .styles import LANGUAGES
-from .styles import console, clear_screen, RED, VERSION, YELLOW
+from .styles import bloque, console, clear_screen, RED, VERSION, YELLOW
 from .folder_picker import (configured_folder, pick_drive_folder, run_set_folder,
                             save_folder_id)
+from .key_setup import run_add_key
 from core.sources import ALL_FILES, collect_sources, list_source_folders
 from core.config import DRIVE_FOLDER_ID
 from translators.registry import AVAILABLE_TRANSLATORS, get_available_translators
@@ -44,6 +46,11 @@ def parse_args():
                         help="source language of the documents (skips auto-detection)")
     parser.add_argument("--set-folder", action="store_true",
                         help="pick the Google Drive destination folder and save it")
+    # nargs="?" para que valga tanto "--add-key" (pregunta de quien) como
+    # "--add-key groq". El default es None y el const "", asi que "se ha pedido" y
+    # "se ha dicho de quien" son dos preguntas distintas.
+    parser.add_argument("--add-key", nargs="?", const="", default=None, metavar="PROVIDER",
+                        help="add an API key to .env (deepl, azure, gemini, groq, cerebras)")
     parser.add_argument("--yes", "-y", action="store_true")
     parser.add_argument("--json",      action="store_true")
     parser.add_argument("--version",   action="version", version=f"mdtranslator {VERSION}")
@@ -164,6 +171,13 @@ def main():
         _run(args)
     except KeyboardInterrupt:
         _abort()
+    except CLIError as e:
+        # Un CLIError es un mensaje ya redactado, no un fallo inesperado: se pinta
+        # tal cual (puede traer varias lineas) y se sale con su codigo.
+        console.print()
+        console.print(bloque("✗", e.message.lstrip("✗ "), RED, destacar=True))
+        console.print()
+        sys.exit(e.exit_code)
 
 _PROVIDER_MAP = {"Azure AI Translator": "azure", "DeepL API": "deepl", "Auto (fallback)": "auto"}
 
@@ -181,7 +195,7 @@ def _ensure_drive_folder(config, interactive: bool) -> None:
     if not interactive:
         print("error: no Drive folder configured — run with --set-folder first", file=sys.stderr)
         sys.exit(2)
-    console.print(f"\n[{YELLOW}]No hay ninguna carpeta de Drive configurada.[/{YELLOW}]")
+    console.print(f"\n[{YELLOW}]No Drive folder configured yet.[/{YELLOW}]")
     elegida = pick_drive_folder()
     if not elegida:
         _abort()
@@ -202,6 +216,9 @@ def _remember_drive_folder(config) -> None:
 def _run(args):
     if args.set_folder:
         sys.exit(run_set_folder())
+
+    if args.add_key is not None:
+        sys.exit(run_add_key(args.add_key or None))
 
     # Stage 1 — Wizard (prints its own header, no clear needed)
     if args.json or args.lang or args.all:

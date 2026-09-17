@@ -18,6 +18,9 @@ class GeminiTranslator(BaseTranslator):
     name = "gemini"
     lang_codes = PROVIDER_CODES["gemini"]
     supported  = SUPPORTED["gemini"]
+    key_env    = "GEMINI_API_KEY"
+    signup     = "https://aistudio.google.com/apikey"
+    free       = "20 requests/day per model (measured)"
     max_batch_size = 30
 
     _LANG_NAMES = {
@@ -71,7 +74,13 @@ class GeminiTranslator(BaseTranslator):
             if src_name:
                 prompt = f"The source text is written in {src_name}.\n" + prompt
             try:
-                response = self._client.models.generate_content(model=self._model, contents=prompt)
+                response = self._client.models.generate_content(
+                    model=self._model, contents=prompt,
+                    # Ver ai/gemini.py: sin esto el SDK avisa por stderr en cada
+                    # ejecucion y el aviso cae encima de la vista Live.
+                    config=self._types.GenerateContentConfig(
+                        automatic_function_calling=(
+                            self._types.AutomaticFunctionCallingConfig(disable=True))))
                 lines = [l.strip() for l in response.text.strip().splitlines() if l.strip()]
                 # If Gemini added commentary or blank lines, try keeping only numbered lines
                 if len(lines) != len(chunk):

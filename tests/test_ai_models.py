@@ -307,3 +307,132 @@ def test_dieciseis_documentos_del_mismo_modelo_son_una_linea():
     texto = salida.getvalue()
     assert texto.count("refined with gemini-3.5-flash") == 1
     assert "16 documents refined with gemini-3.5-flash" in texto
+
+
+def test_el_modelo_no_se_nombra_dos_veces_en_el_aviso():
+    # Los adaptadores ya escriben su ref delante del error, y FallbackModel la volvía a
+    # poner: "gemini:no-existe: gemini:no-existe: 404 NOT_FOUND". Medido contra la API
+    # con un id inventado. Pero al error pelado de un adaptador roto sí hay que
+    # ponérsela, o el aviso no dice de quién es.
+    cadena = FallbackModel([
+        Fijo("gemini", "no-existe", error=AIError("gemini:no-existe: 404 NOT_FOUND")),
+        Fijo("groq", "y", error=RuntimeError("boom")),
+    ])
+    with pytest.raises(AIError) as exc:
+        cadena.complete("x")
+    assert str(exc.value).count("gemini:no-existe") == 1
+    assert "groq:y: boom" in str(exc.value)
+
+
+def test_el_mismo_aviso_en_muchos_documentos_es_una_linea():
+    # Dieciséis filas idénticas debajo de la tabla empujaban el bloque Unfinished
+    # —lo único accionable de la pantalla— fuera de un terminal de 50 líneas. Mismo
+    # motivo por el que la línea del cambio de modelo ya se colapsa.
+    aviso = "No AI model has quota left — text not refined"
+    entrada = [(l, f"tema{i}.md", aviso) for i in range(8) for l in ("AR", "ZH")]
+    agrupado = results_mod._agrupar(entrada)
+    assert len(agrupado) == 1
+    lang, source, msg = agrupado[0]
+    assert (lang, source) == ("", None)
+    assert msg == f"16 documents (AR, ZH) · {aviso}"
+
+
+def test_un_aviso_de_un_solo_documento_sigue_diciendo_cual():
+    entrada = [("AR", "tema1.md", "Gemini unavailable — text not refined"),
+               ("ZH", "tema2.md", "PDF conversion failed — DOCX available"),
+               ("ZH", "tema3.md", "PDF conversion failed — DOCX available")]
+    agrupado = results_mod._agrupar(entrada)
+    assert ("AR", "tema1.md", "Gemini unavailable — text not refined") in agrupado
+    assert ("", None, "2 documents (ZH) · PDF conversion failed — DOCX available") \
+        in agrupado
+
+
+def test_el_refinado_saltado_se_lee_igual_que_el_que_lo_intento():
+    # El pipeline pone su propio aviso en las tareas que se saltan el refinado porque
+    # sin_cuota ya está encendido. Si no dice lo mismo que el fallo de verdad, la
+    # pantalla cuenta dos historias del mismo motivo y no colapsan en una línea.
+    saltado = refiner.AVISO_SIN_CUOTA
+    intentado = ("429 RESOURCE_EXHAUSTED — no quota left on any model:\n"
+                 "  gemini:gemini-2.5-flash: 429")
+    assert refiner.es_aviso_de_cuota(saltado)
+    assert results_mod._short_warning(saltado) == results_mod._short_warning(intentado)
+    # Y no nombra a Gemini: con la lista de modelos, el que se agotó puede ser otro.
+    assert "gemini" not in saltado.lower()
+
+
+
+
+# --------------------------------------------------------------- espacios al final
+# openai/gpt-oss-120b —el modelo por defecto de Groq— cierra casi cada linea con dos
+# espacios, y en Markdown eso es un salto forzado: Pandoc lo mete como <br> dentro del
+# parrafo. Gemini no lo hacia, asi que no se vio hasta tener clave de Groq.
+
+def test_el_refinado_no_deja_saltos_forzados_al_final_de_linea():
+    from document import refiner
+
+    class Modelo:
+        ref = "falso:modelo"
+        def complete(self, prompt, system="", temperature=0.2):
+            return "1. primera linea refinada.  \n2. segunda linea refinada.   "
+
+    out, aviso = refiner._una_llamada(["a", "b"], "ar", Modelo())
+    assert aviso is None
+    assert out == ["primera linea refinada.", "segunda linea refinada."]
+
+
+def test_el_formateo_de_txt_tampoco_los_deja():
+    from integrations.generate_md import _strip_fences
+
+    crudo = "# Titulo  \n\nUn parrafo que acaba con dos espacios.  \nY otra linea.   "
+    limpio = _strip_fences(crudo)
+    assert not any(l != l.rstrip() for l in limpio.splitlines())
+    assert limpio.splitlines()[0] == "# Titulo"
+
+
+def test_un_modelo_que_no_existe_no_se_cuenta_como_falta_de_cuota():
+    """`reason` vale "no quota" y "failed", y la frase tiene que encajar con las dos.
+
+    Salio con la clave de Groq: el primero de la cadena daba 404 (no 429) y la pantalla
+    decia "gemini-2.5-flash-lite had failed".
+    """
+    salida = io.StringIO()
+    console = Console(file=salida, width=100, force_terminal=False, legacy_windows=False)
+    resultados = [{"lang": "AR", "source": "tema.md", "file": "tema.ar.docx", "ok": True,
+                   "time": 3.0, "gdocs_url": None, "warning": None, "incomplete": False,
+                   "refine_model": {"used": "groq:openai/gpt-oss-120b",
+                                    "instead_of": "gemini:gemini-2.5-flash-lite",
+                                    "reason": "failed"}}]
+    import cli.results as r
+    console_original = r.console
+    r.console = console
+    try:
+        r.show_results(resultados, 3.0)
+    finally:
+        r.console = console_original
+    texto = salida.getvalue()
+    assert "gemini:gemini-2.5-flash-lite failed" in texto
+    assert "had failed" not in texto
+
+
+@pytest.mark.parametrize("ancho", [100, 80, 60, 50])
+def test_la_fila_del_modelo_cabe_con_refs_de_dos_proveedores(ancho):
+    """`groq:openai/gpt-oss-120b` es mas largo que cualquier id de Gemini."""
+    salida = io.StringIO()
+    console = Console(file=salida, width=ancho, force_terminal=False, legacy_windows=False)
+    resultados = [{"lang": "AR", "source": "tema.md", "file": "tema.ar.docx", "ok": True,
+                   "time": 3.0, "gdocs_url": None, "warning": None, "incomplete": False,
+                   "refine_model": {"used": "groq:openai/gpt-oss-120b",
+                                    "instead_of": "gemini:gemini-2.5-flash-lite",
+                                    "reason": "no quota"}}]
+    import cli.results as r
+    console_original = r.console
+    r.console = console
+    try:
+        r.show_results(resultados, 3.0)
+    finally:
+        r.console = console_original
+    lineas = salida.getvalue().splitlines()
+    assert all(len(l) <= ancho for l in lineas), f"se sale a {ancho} columnas"
+    # La continuacion de un aviso largo no empieza en la columna 0.
+    sigue = [l for l in lineas if "gpt-oss" in l or "flash-lite" in l]
+    assert sigue and all(l.startswith(" ") for l in sigue)

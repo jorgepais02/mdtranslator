@@ -42,7 +42,10 @@ def _strip_fences(text: str) -> str:
     if text.startswith("```"):
         text = re.sub(r'^```[a-z]*\n?', '', text)
         text = re.sub(r'\n?```$', '', text)
-    return text.strip()
+    # Y sin espacios al final de linea: en Markdown dos espacios son un salto forzado
+    # y Pandoc los mete como <br> en medio del parrafo. Ver refiner._una_llamada, que
+    # es donde se vio: openai/gpt-oss-120b cierra con ellos casi cada linea.
+    return "\n".join(l.rstrip() for l in text.strip().splitlines())
 
 def _validate(md: str) -> list[str]:
     warnings = []

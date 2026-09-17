@@ -223,7 +223,7 @@ def _paso_provider(estado: dict, volver: bool):
             opciones.append(questionary.Choice(title=nombre, value=pid))
         except Exception:
             opciones.append(questionary.Choice(title=nombre, value=pid,
-                                               disabled="no API key in .env"))
+                                               disabled="no key · --add-key"))
 
     r = ask_select("Choose translation provider", opciones,
                    default=estado.get("_ultimo_provider"), back=volver)

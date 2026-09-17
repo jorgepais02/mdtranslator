@@ -35,6 +35,11 @@ class GeminiModel(AIModel):
                 config=types.GenerateContentConfig(
                     system_instruction=system or None,
                     temperature=temperature,
+                    # Aqui solo se pide texto. Sin desactivarlo, el SDK entra en la
+                    # rama de "automatic function calling" y escribe un warning por
+                    # ejecucion que en la vista Live se mete por medio de la tabla.
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                        disable=True),
                 ),
             )
         except Exception as e:

@@ -19,7 +19,7 @@ from .styles import (console, elide as _elide, status_style as _status_style,
 from translators import get_translator
 from translators.base import call_translate
 from translators.cache import TranslationCache
-from document.refiner import es_aviso_de_cuota, refine_markdown
+from document.refiner import AVISO_SIN_CUOTA, es_aviso_de_cuota, refine_markdown
 from core.parser import parse_markdown_lines, rebuild_markdown_from_translations
 from core.docgen import generate_docx_document, convert_many_to_pdf
 from core.config import TRANSLATED_DIR, DRIVE_FOLDER_ID, CONFIG
@@ -710,7 +710,7 @@ def run_pipeline(config: dict) -> list[dict]:
                         # diferencia entre intentarlo 5 veces y intentarlo 2.
                         with gemini_sem:
                             if sin_cuota.is_set():
-                                refine_warn = "Gemini 429 quota exceeded — refining skipped"
+                                refine_warn = AVISO_SIN_CUOTA
                             else:
                                 rebuilt, refine_warn, cambio = refine_markdown(
                                     rebuilt, lang, cache=refine_cache,
@@ -844,8 +844,8 @@ def run_pipeline(config: dict) -> list[dict]:
             with folders_lock:
                 quedan = in_flight
             if quedan:
-                console.print(f"\n[{YELLOW}]Cancelando… {quedan} petición(es) ya en curso, "
-                              f"no se pueden abortar a medias.[/{YELLOW}]")
+                console.print(f"\n[{YELLOW}]Cancelling… {quedan} request(s) already in "
+                              f"flight cannot be aborted halfway.[/{YELLOW}]")
             executor.shutdown(wait=True, cancel_futures=True)
             raise
         finally:

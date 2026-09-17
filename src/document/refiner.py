@@ -159,6 +159,14 @@ _MAX_ESPERA   = MAX_ESPERA
 _PASO_ESPERA  = 1             # s: se duerme a trocitos para poder atender un Ctrl+C
 
 
+# El aviso de las tareas que se saltan el refinado porque ya no queda cuota. Es el
+# mismo texto que trae el fallo de verdad —y vive aqui, no en el pipeline, porque el
+# vocabulario de estos avisos es de este modulo—: si dijeran cosas distintas, la
+# pantalla final contaria dos historias del mismo motivo y no colapsarian en una linea.
+AVISO_SIN_CUOTA = ("429 RESOURCE_EXHAUSTED — no quota left on any model, "
+                   "refining skipped")
+
+
 def es_aviso_de_cuota(aviso: str | None) -> bool:
     """True si el aviso viene de la cuota de Gemini y no de otro fallo. API: bool.
 
@@ -215,7 +223,10 @@ def _una_llamada(texts: list[str], lang: str, modelo) -> tuple[list[str], str | 
     for line in raw.strip().splitlines():
         m = re.match(r'^\d+\.\s+(.*)', line)
         if m:
-            out.append(m.group(1))
+            # rstrip: dos espacios al final de una linea son un salto forzado en
+            # Markdown, y Pandoc los convierte en un <br> dentro del parrafo. Gemini
+            # no los ponia; openai/gpt-oss-120b cierra con ellos casi cada linea.
+            out.append(m.group(1).rstrip())
     if len(out) != len(texts):
         return texts, f"{modelo.ref} returned {len(out)}/{len(texts)} lines"
     return out, None

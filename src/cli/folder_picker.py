@@ -21,8 +21,8 @@ from pathlib import Path
 import questionary
 
 from .prompts import ask_select, ask_text
-from .styles import (console, elide, marca, aire_superior, CONTEXT, GREEN,
-                     MARGEN, META, RED, YELLOW)
+from .styles import (console, clear_screen, elide, marca, aire_superior, CONTEXT,
+                     GREEN, MARGEN, META, RED, YELLOW)
 
 from core.config import PROJECT_ROOT
 
@@ -37,11 +37,11 @@ _SERIE_RE = re.compile(r"^(.*?)(\d+)(\D*)$")
 # Sin emoji: 📁 ocupa dos celdas del terminal y ✓ una, asi que los nombres de las
 # carpetas nunca quedaban alineados entre si. El sufijo "/" distingue igual de bien
 # una carpeta y no rompe la cuadricula.
-_USE    = "Usar esta carpeta"
-_NEW    = "Crear una carpeta aquí…"
-_UP     = "Subir un nivel"
-_PASTE  = "Pegar una URL de Drive"
-_CANCEL = "Cancelar"
+_USE    = "Use this folder"
+_NEW    = "Create a folder here…"
+_UP     = "Up one level"
+_PASTE  = "Paste a Drive URL"
+_CANCEL = "Cancel"
 
 
 def _plural(n: int, singular: str, plural: str) -> str:
@@ -136,7 +136,7 @@ def create_drive_folder(name: str, parent_id: str, manager=None) -> tuple[str, s
     try:
         return _manager(manager).get_or_create_subfolder(parent_id, name), name
     except Exception as e:
-        console.print(f"[{RED}]✗ No se pudo crear la carpeta: {e}[/{RED}]")
+        console.print(f"[{RED}]✗ Could not create the folder: {e}[/{RED}]")
         return None
 
 
@@ -151,13 +151,13 @@ def create_folder_next_to(name: str, sibling_of: str, manager=None) -> tuple[str
     try:
         padre = (g.get_folder_info(sibling_of).get("parents") or [ROOT])[0]
     except Exception as e:
-        console.print(f"[{RED}]✗ No se pudo leer la carpeta actual: {e}[/{RED}]")
+        console.print(f"[{RED}]✗ Could not read the current folder: {e}[/{RED}]")
         return None
     return create_drive_folder(name, padre, manager=g)
 
 
 def _elegida(nombre: str, ancho_extra: int = 26) -> None:
-    console.print(f"{MARGEN}[{GREEN}]✓[/{GREEN}] [{META}]Carpeta seleccionada:[/{META}] "
+    console.print(f"{MARGEN}[{GREEN}]✓[/{GREEN}] [{META}]Folder selected:[/{META}] "
                   f"[{CONTEXT}]{elide(nombre, max(16, console.width - ancho_extra))}[/{CONTEXT}]")
 
 
@@ -170,14 +170,16 @@ def pick_drive_folder(manager=None) -> tuple[str, str] | None:
     """
     g = _manager(manager)
 
-    current, label = ROOT, "Mi unidad"
+    current, label = ROOT, "My Drive"
     camino: list[str] = [label]          # migas de pan: donde estas, no solo el nombre
+    pendiente: str | None = None         # un aviso que tiene que sobrevivir al repintado
+    raiz_real: str | None = None         # "Mi unidad" tambien tiene id propio
     while True:
         ruta = " / ".join(camino)
         try:
             subs = g.list_subfolders(current)
         except Exception as e:
-            console.print(f"[{RED}]✗ No se pudo leer la carpeta: {e}[/{RED}]")
+            console.print(f"[{RED}]✗ Could not read the folder: {e}[/{RED}]")
             return None
 
         # El nombre se recorta: questionary parte en dos lineas las opciones largas
@@ -195,11 +197,10 @@ def pick_drive_folder(manager=None) -> tuple[str, str] | None:
 
         # Las mismas migas que el wizard, y en los mismos dos tonos: donde estas es
         # contexto de la pregunta, no la pregunta.
-        console.print(f"\n{MARGEN}[{META}]>[/{META}] "
-                      f"[{CONTEXT}]{elide(ruta, max(16, console.width - 28))}[/{CONTEXT}]"
-                      f"[{META}] · {_plural(len(subs), 'subcarpeta', 'subcarpetas')}[/{META}]")
+        _pintar(ruta, len(subs), pendiente)
+        pendiente = None
 
-        answer = ask_select("Elige la carpeta de destino", choices)
+        answer = ask_select("Choose the destination folder", choices)
 
         if answer is None or answer == _CANCEL:
             return None
@@ -207,17 +208,18 @@ def pick_drive_folder(manager=None) -> tuple[str, str] | None:
         if answer == _USE:
             if current == ROOT:
                 info = g.get_folder_info(ROOT)      # id real de "Mi unidad"
-                current, label = info["id"], info.get("name") or label
+                raiz_real = info["id"]
+                current, label = raiz_real, info.get("name") or label
             _elegida(ruta)
             return current, label
 
         if answer == _NEW:
             # Crear es elegir: quien crea la carpeta del modulo nuevo la quiere usar, y
             # obligarle a buscarla despues en la lista era un paso de mas.
-            creada = create_drive_folder(ask_text("Nombre de la carpeta nueva") or "",
+            creada = create_drive_folder(ask_text("New folder name") or "",
                                          current, manager=g)
             if creada is None:
-                _aviso("No he creado ninguna carpeta.")
+                pendiente = "No folder was created."
                 continue
             _elegida(f"{ruta} / {creada[1]}")
             return creada
@@ -225,20 +227,31 @@ def pick_drive_folder(manager=None) -> tuple[str, str] | None:
         if answer == _UP:
             parents = g.get_folder_info(current).get("parents") or [ROOT]
             current = parents[0]
-            label = g.get_folder_info(current)["name"] if current != ROOT else "Mi unidad"
+            # El padre de una carpeta de primer nivel es "Mi unidad" con su id real,
+            # no el alias "root", asi que al volver arriba la raiz dejaba de parecer
+            # la raiz: "Up one level" seguia en la lista sin nada a donde subir.
+            if current != ROOT:
+                if raiz_real is None:
+                    try:
+                        raiz_real = g.get_folder_info(ROOT)["id"]
+                    except Exception:
+                        raiz_real = ""
+                if current == raiz_real:
+                    current = ROOT
+            label = g.get_folder_info(current)["name"] if current != ROOT else "My Drive"
             camino = camino[:-1] or [label]
             continue
 
         if answer == _PASTE:
-            pasted = ask_text("Pega la URL (o el ID) de la carpeta")
+            pasted = ask_text("Paste the folder URL (or its ID)")
             folder_id = extract_folder_id(pasted or "")
             if not folder_id:
-                _aviso("No he reconocido ninguna carpeta en eso.")
+                pendiente = "That does not look like a Drive folder."
                 continue
             try:
                 info = g.get_folder_info(folder_id)
             except Exception as e:
-                console.print(f"[{RED}]✗ No puedo acceder a esa carpeta: {e}[/{RED}]")
+                pendiente = f"Cannot open that folder: {e}"
                 continue
             _elegida(info["name"])
             return info["id"], info["name"]
@@ -249,18 +262,40 @@ def pick_drive_folder(manager=None) -> tuple[str, str] | None:
 
 
 def _aviso(texto: str) -> None:
-    console.print(f"[{YELLOW}]⚠ {texto}[/{YELLOW}]")
+    console.print(f"{MARGEN}[{YELLOW}]⚠ {texto}[/{YELLOW}]")
+
+
+def _pintar(ruta: str, subcarpetas: int, pendiente: str | None = None) -> None:
+    """Repinta la pantalla del selector: marca, migas del camino y aire.
+
+    Igual que el wizard, y por lo mismo: antes cada nivel dejaba su cabecera y su
+    filete en pantalla, asi que bajar tres carpetas eran tres preguntas iguales
+    apiladas —mas la del wizard que abrio el selector— y la lista viva quedaba al
+    final de una columna de restos. Aqui solo hay una pregunta cada vez; lo que
+    cambia de un nivel al siguiente es el camino, que es justo lo que dicen las migas.
+    """
+    clear_screen()
+    for _ in range(aire_superior()):
+        console.print()
+    console.print(marca())
+    console.print()
+    console.print(f"{MARGEN}[{META}]>[/{META}] "
+                  f"[{CONTEXT}]{elide(ruta, max(16, console.width - 28))}[/{CONTEXT}]"
+                  f"[{META}] · {_plural(subcarpetas, 'subfolder', 'subfolders')}[/{META}]")
+    console.print()
+    # El aviso de la vuelta anterior lo pinta quien limpia, o se borraria antes de
+    # poder leerse: es el mismo trato que le da el wizard.
+    if pendiente:
+        _aviso(pendiente)
+    console.print()
 
 
 def run_set_folder() -> int:
     """Punto de entrada de --set-folder. Devuelve el código de salida del proceso."""
-    for _ in range(aire_superior()):
-        console.print()
-    console.print(marca())
     elegida = pick_drive_folder()
     if not elegida:
-        console.print(f"\n{MARGEN}[{META}]Cancelado. No se ha cambiado nada.[/{META}]\n")
+        console.print(f"\n{MARGEN}[{META}]Cancelled. Nothing was changed.[/{META}]\n")
         return 0
     path = save_folder_id(*elegida)
-    console.print(f"{MARGEN}[{META}]Guardado en {path.name}[/{META}]\n")
+    console.print(f"{MARGEN}[{META}]Saved to {path.name}[/{META}]\n")
     return 0

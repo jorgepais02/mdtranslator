@@ -7,9 +7,10 @@ import pytest
 import questionary
 from rich.console import Console
 
-from cli import folder_picker, wizard
+from cli import folder_picker, prompts, wizard
+from cli.errors import CLIError
 from cli.prompts import BACK
-from cli.styles import elide
+from cli.styles import bloque, elide, CONTEXT, RED, YELLOW
 
 LARGO = "transcripcion-clase-magistral-seguridad-informatica-2026-tema-4.md"
 
@@ -359,9 +360,9 @@ def test_el_selector_no_usa_emoji():
     assert linea_opciones and not any("📁" in l or "🔗" in l for l in linea_opciones)
 
 
-@pytest.mark.parametrize("n,esperado", [(0, "0 subcarpetas"), (1, "1 subcarpeta"), (4, "4 subcarpetas")])
+@pytest.mark.parametrize("n,esperado", [(0, "0 subfolders"), (1, "1 subfolder"), (4, "4 subfolders")])
 def test_los_plurales_estan_bien(n, esperado):
-    assert folder_picker._plural(n, "subcarpeta", "subcarpetas") == esperado
+    assert folder_picker._plural(n, "subfolder", "subfolders") == esperado
 
 
 def test_elide_es_el_mismo_helper_en_todas_las_vistas():
@@ -372,3 +373,93 @@ def test_elide_es_el_mismo_helper_en_todas_las_vistas():
 @pytest.mark.parametrize("ancho,cabe", [(40, 32), (80, 72), (120, 112)])
 def test_el_recorte_respeta_el_ancho(ancho, cabe):
     assert len(elide("x" * 200, cabe)) == cabe
+
+
+def test_la_interfaz_esta_toda_en_el_mismo_idioma():
+    # El selector de carpetas salió en español dentro de una UI en inglés: "Elige la
+    # carpeta de destino" y "Usar esta carpeta" debajo de "Drive folder" y "Ready to
+    # run?". Los comentarios del código siguen en español —no están en el AST—, pero
+    # un literal con acento en src/cli es texto de pantalla en el idioma equivocado.
+    import ast, re
+    acentos = re.compile(r"[áéíóúñÁÉÍÓÚÑ¿¡]")
+    sospechosos = []
+    for f in sorted(Path(folder_picker.__file__).parent.glob("*.py")):
+        arbol = ast.parse(f.read_text(encoding="utf-8"))
+        docs = set()
+        for nodo in ast.walk(arbol):
+            if isinstance(nodo, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                                 ast.ClassDef)):
+                d = ast.get_docstring(nodo, clean=False)
+                if d:
+                    docs.add(d)
+        for nodo in ast.walk(arbol):
+            if (isinstance(nodo, ast.Constant) and isinstance(nodo.value, str)
+                    and nodo.value not in docs and acentos.search(nodo.value)):
+                sospechosos.append(f"{f.name}:{nodo.lineno}: {nodo.value[:60]}")
+    assert not sospechosos, "texto de pantalla en español: " + "; ".join(sospechosos)
+
+
+# --------------------------------------------------------------------------- sin tty
+# El `!` de un cliente que no abre pty dejo esto por pantalla: veinte lineas de traza
+# de prompt_toolkit acabando en EOFError. Una traza no es una pantalla, y todas las
+# preguntas pasan por las mismas cuatro funciones.
+
+@pytest.mark.parametrize("llamada", [
+    lambda: prompts.ask_select("Pick", ["a", "b"]),
+    lambda: prompts.ask_checkbox("Pick", ["a", "b"]),
+    lambda: prompts.ask_confirm("Sure?"),
+    lambda: prompts.ask_text("Name"),
+])
+def test_sin_terminal_las_preguntas_avisan_en_vez_de_reventar(llamada, monkeypatch):
+    monkeypatch.setattr(prompts.sys, "stdin", io.StringIO())   # un StringIO no es tty
+    with pytest.raises(CLIError) as e:
+        llamada()
+    assert "real terminal" in e.value.message
+    assert e.value.exit_code == 2
+
+
+def test_con_stdin_cerrado_tambien_avisa(monkeypatch):
+    cerrado = io.StringIO()
+    cerrado.close()                       # isatty() sobre esto lanza ValueError
+    monkeypatch.setattr(prompts.sys, "stdin", cerrado)
+    with pytest.raises(CLIError):
+        prompts.ask_confirm("Sure?")
+
+
+# ------------------------------------------------------------------- bloque que dobla
+# `elide` cortaba el comando del aviso a 50 columnas (`python -m src.ai.registr…`) y un
+# comando a medias no sirve de nada: estos bloques doblan.
+
+@pytest.mark.parametrize("ancho", [100, 60, 50, 40])
+def test_el_bloque_dobla_sin_perder_texto_ni_pasarse_del_ancho(ancho):
+    texto = ("llama-3.3-70b is not among the 21 models this key can use\n"
+             "pick another with: python -m src.ai.registry --check")
+    c = Console(file=io.StringIO(), width=ancho, force_terminal=False, no_color=True)
+    c.print(bloque("⚠", texto, "yellow"))
+    lineas = c.file.getvalue().splitlines()
+
+    assert all(len(l) <= ancho for l in lineas)
+    assert "…" not in c.file.getvalue()
+    # Todas las palabras siguen ahi, y el comando entero se puede reconstruir leyendo.
+    junto = " ".join(l.strip() for l in lineas)
+    for palabra in texto.split():
+        assert palabra in junto
+
+
+def test_el_bloque_sangra_las_lineas_de_continuacion():
+    c = Console(file=io.StringIO(), width=50, force_terminal=False, no_color=True)
+    c.print(bloque("⚠", "una linea muy larga que no cabe de ninguna manera en este ancho",
+                   "yellow"))
+    lineas = [l for l in c.file.getvalue().splitlines() if l.strip()]
+    assert lineas[0].startswith(" ⚠ ")
+    # La continuacion cae bajo el texto, no bajo el glifo ni en la columna 0.
+    assert all(l.startswith("   ") for l in lineas[1:])
+
+
+def test_el_bloque_destaca_solo_el_titular():
+    grid = bloque("✗", "titular\ndetalle", RED, destacar=True)
+    titular, detalle = grid.columns[1]._cells
+    # Un error tiene titular y detalle; un aviso es todo detalle.
+    assert (titular.style, detalle.style) == (RED, CONTEXT)
+    sin_destacar = bloque("⚠", "titular\ndetalle", YELLOW)
+    assert {c.style for c in sin_destacar.columns[1]._cells} == {CONTEXT}

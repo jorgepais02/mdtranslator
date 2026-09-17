@@ -14,6 +14,12 @@ class AzureTranslator(BaseTranslator):
     name = "azure"
     lang_codes = PROVIDER_CODES["azure"]
     supported  = SUPPORTED["azure"]
+    key_env    = "AZURE_TRANSLATOR_KEY"
+    # La region va con la clave: sin ella la API contesta 401 aunque la clave sea
+    # buena, y "global" es lo que vale para un recurso sin region fijada.
+    extra_env  = (("AZURE_TRANSLATOR_REGION", "Resource region", "global"),)
+    signup     = "https://portal.azure.com/#create/Microsoft.CognitiveServicesTextTranslation"
+    free       = "2M characters/month for 12 months"
 
     def __init__(self, api_key: str | None = None, region: str | None = None):
         self.api_key = api_key or os.getenv("AZURE_TRANSLATOR_KEY", "")

@@ -38,6 +38,30 @@ def summary_grid(filas) -> "Table":
     return tabla
 
 
+
+def bloque(glifo: str, texto: str, color: str, destacar: bool = False) -> "Table":
+    """Un aviso de varias lineas con sangria colgante. API: renderable de rich.
+
+    Hermano de `summary_grid`, y el contrario de `elide`: aqui el texto **dobla** y no
+    se recorta, porque lo que se dice en varias lineas suele acabar en un comando y un
+    comando a medias no sirve de nada (`elide` dejaba `python -m src.ai.registr…` a 50
+    columnas). Misma forma que el bloque Unfinished de results.py: una columna de tres
+    para el glifo y la sangria, y el texto plegando debajo de si mismo.
+
+    `destacar` pinta la primera linea en `color` en vez de en CONTEXT: un error tiene
+    titular y detalle, un aviso es todo detalle.
+    """
+    from rich.table import Table
+    from rich.text import Text
+    grid = Table.grid(padding=(0, 0))
+    grid.add_column(width=3, no_wrap=True)
+    grid.add_column(overflow="fold")
+    for i, linea in enumerate(texto.splitlines()):
+        grid.add_row(Text(f" {glifo} " if i == 0 else "", style=color),
+                     Text(linea.strip(), style=color if destacar and i == 0 else CONTEXT))
+    return grid
+
+
 def clear_screen():
     """Clear terminal screen synchronously through Python's stdout buffer."""
     sys.stdout.flush()

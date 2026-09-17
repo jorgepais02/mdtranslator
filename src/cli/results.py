@@ -4,11 +4,32 @@ from rich.console import Group
 from rich.columns import Columns
 from rich.rule import Rule
 from rich import box
-from .styles import console, GREEN, BLUE, CYAN, DIM, BRIGHT, FG, RED, VERSION, YELLOW
+from .styles import (console, elide, GREEN, BLUE, CYAN, DIM, BRIGHT, FG, RED,
+                     VERSION, YELLOW)
 
 def _short_warning(msg: str) -> str:
     msg = str(msg)
     lo  = msg.lower()
+
+    # ── Traduccion: el mensaje agregado se mira primero ───────────────
+    # FallbackTranslator mete dentro del suyo el error de cada proveedor, asi que un
+    # 429 del traductor Gemini viajaba con "RESOURCE_EXHAUSTED" dentro y las reglas
+    # del refinado —que van debajo— lo anunciaban como "text not refined" en un
+    # documento que no habia llegado ni a traducirse. Medido con --lang XX: DeepL 400,
+    # Azure 400 "the target language is not valid" y Gemini 429, y la pantalla final
+    # decia "Gemini quota exceeded — text not refined".
+    if "all translation providers failed" in lo:
+        fallos = [l.strip() for l in msg.splitlines()[1:] if l.strip()]
+        def _es_cuota(linea: str) -> bool:
+            b = linea.lower()
+            return "429" in linea or "quota" in b or "resource_exhausted" in b
+        # "todos sin cuota" solo si lo son todos: con dos 400 y un 429 seria mentira,
+        # y lo que hay que arreglar no es esperar sino el codigo de idioma.
+        if fallos and all(_es_cuota(f) for f in fallos):
+            return "All translation providers are out of quota — retry later"
+        if "target language is not valid" in lo or "target_lang" in lo:
+            return "Target language rejected by the providers — check the code"
+        return "All translation providers failed — check API keys and quotas"
 
     # ── Modelos de IA (refinado) ──────────────────────────────────────
     # Con varios modelos en la lista, el aviso ya no es de Gemini sino del conjunto:
@@ -32,8 +53,8 @@ def _short_warning(msg: str) -> str:
         return "Gemini unavailable — text not refined"
 
     # ── Translation failures ──────────────────────────────────────────
-    if "all translation providers failed" in lo:
-        return "All translation providers failed — check API keys and quotas"
+    # El caso agregado se resuelve arriba; aqui quedan los que llegan pelados
+    # (un proveedor suelto invocado desde un modulo, o un fallo de configuracion).
     if "no translation provider" in lo:
         return "No translation provider configured — add API key to .env"
     if "deepl quota exceeded" in lo or ("quota exceeded" in lo and "deepl" in lo):
@@ -81,6 +102,57 @@ def _short_warning(msg: str) -> str:
     return cut + "…"
 
 
+# LANG(6) + STATUS(6) + TIME(7), cinco bordes y dos de relleno por columna: lo que
+# queda es para los nombres, y se reparte aqui en vez de dejarselo a rich.
+_FIJAS = 6 + 6 + 7 + 5 + 10
+_MIN_NOMBRE = 18
+
+
+def _anchos(multi: bool, ancho: int) -> tuple[int, int | None]:
+    """Cuanto mide cada columna de nombre, y si cabe la del fichero. API: (source, file).
+
+    Con el nombre en crudo rich lo envuelve, y en un modulo entero cada fila ocupaba
+    tres renglones: "6. Jaulas de Faraday en / investigaciones forenses DFIR / (I).md"
+    dos veces por fila, porque SOURCE y FILE son casi la misma cadena. Dieciseis
+    tareas eran cuarenta y cinco lineas de tabla y el pie se iba de la pantalla.
+    Recortar es lo que hace el resto de las vistas (styles.elide), y el reparto es
+    explicito: mitad y mitad, y si no llegan a _MIN_NOMBRE se sacrifica FILE —el
+    nombre de salida es el de la fuente con el idioma detras— antes que dejar las dos
+    columnas ilegibles.
+    """
+    libre = max(_MIN_NOMBRE, ancho - _FIJAS)
+    if not multi:
+        return libre, libre
+    mitad = libre // 2
+    if mitad < _MIN_NOMBRE:
+        return libre, None
+    return mitad, libre - mitad
+
+
+def _agrupar(avisos: list[tuple[str, str | None, str]]) -> list[tuple[str, str | None, str]]:
+    """El mismo aviso en varios documentos, en una sola linea. API: la lista corta.
+
+    Con dieciseis tareas en arabe y chino sin cuota eran dieciseis filas identicas
+    debajo de la tabla, y el bloque Unfinished —lo unico accionable de la pantalla— se
+    iba por abajo en un terminal de cincuenta lineas. Cual de los documentos se quedo
+    sin refinar no es accionable: el comando de reintento los repasa todos y la cache
+    se salta los que ya estan; lo que se lee es cuantos y en que idiomas. Misma forma
+    que la linea del cambio de modelo, que ya se colapsa por lo mismo.
+    """
+    grupos: dict[str, list[tuple[str, str | None]]] = {}
+    for lang, source, msg in avisos:
+        grupos.setdefault(msg, []).append((lang, source))
+    salida: list[tuple[str, str | None, str]] = []
+    for msg, filas in grupos.items():
+        if len(filas) == 1:
+            salida.append((filas[0][0], filas[0][1], msg))
+            continue
+        idiomas = list(dict.fromkeys(l for l, _ in filas if l))
+        cuales  = f" ({', '.join(idiomas)})" if idiomas else ""
+        salida.append(("", None, f"{len(filas)} documents{cuales} · {msg}"))
+    return salida
+
+
 def _por_modelo(results: list[dict]) -> dict[tuple, int]:
     """Cuántos documentos refinó cada modelo que no era el preferido. API: dict."""
     cuenta: dict[tuple, int] = {}
@@ -113,12 +185,15 @@ def show_results(results: list[dict], total_time: float, version: str = VERSION,
         header_style=DIM,   # dim uppercase headers per spec
     )
     # Anchos ajustados al contenido: con 8 cada una, LANG y STATUS se quedaban el
-    # sitio que necesita el nombre del fichero. FILE es la unica columna elastica y
-    # no lleva no_wrap: con el, rich le daba todo el ancho y vaciaba a las demas.
+    # sitio que necesita el nombre del fichero. Los nombres van recortados a mano y
+    # con no_wrap: el reparto lo decide _anchos, porque dejandoselo a rich cada fila
+    # se envolvia en tres renglones (ver _anchos).
+    ancho_src, ancho_file = _anchos(multi, console.width)
     file_table.add_column("LANG",   style=CYAN,  width=6, no_wrap=True)
     if multi:
-        file_table.add_column("SOURCE", style=DIM, overflow="ellipsis")
-    file_table.add_column("FILE",   style=FG,   overflow="ellipsis")
+        file_table.add_column("SOURCE", style=DIM, no_wrap=True, width=ancho_src)
+    if ancho_file:
+        file_table.add_column("FILE", style=FG, no_wrap=True, width=ancho_file)
     file_table.add_column("STATUS", width=6, justify="center")
     file_table.add_column("TIME",   style=DIM, justify="right", width=7, no_wrap=True)
 
@@ -126,8 +201,10 @@ def show_results(results: list[dict], total_time: float, version: str = VERSION,
         status = Text("✓", style=GREEN) if r["ok"] else Text("✗", style=RED)
         row = [r["lang"]]
         if multi:
-            row.append(r.get("source", "—"))
-        row.extend([r["file"], status, f"{r['time']:.1f}s"])
+            row.append(elide(r.get("source", "—"), ancho_src))
+        if ancho_file:
+            row.append(elide(r["file"], ancho_file))
+        row.extend([status, f"{r['time']:.1f}s"])
         file_table.add_row(*row)
 
     parts.append(file_table)
@@ -146,7 +223,7 @@ def show_results(results: list[dict], total_time: float, version: str = VERSION,
         )
         gdocs_table.add_column("LANG", style=CYAN, width=6, no_wrap=True)
         if multi:
-            gdocs_table.add_column("SOURCE", style=DIM, overflow="ellipsis")
+            gdocs_table.add_column("SOURCE", style=DIM, no_wrap=True, width=ancho_src)
         gdocs_table.add_column("URL", overflow="ellipsis")
 
         for r in results:
@@ -157,7 +234,7 @@ def show_results(results: list[dict], total_time: float, version: str = VERSION,
                 link.append(short_url, style=f"link {url} {BLUE} underline")
                 row = [r["lang"]]
                 if multi:
-                    row.append(r.get("source", "—"))
+                    row.append(elide(r.get("source", "—"), ancho_src))
                 row.append(link)
                 gdocs_table.add_row(*row)
 
@@ -165,8 +242,8 @@ def show_results(results: list[dict], total_time: float, version: str = VERSION,
         parts.append(Text())
 
     # ── Warnings ──────────────────────────────────────────────────────
-    warnings = [(r["lang"], r.get("source"), _short_warning(r["warning"]))
-                for r in results if r.get("warning")]
+    warnings = _agrupar([(r["lang"], r.get("source"), _short_warning(r["warning"]))
+                         for r in results if r.get("warning")])
     # El modelo con el que se refinó es un aviso más, y solo aparece cuando no fue el
     # preferido: "salió, pero no del que pediste" es justo lo que hay que contar, y
     # amarillo ya significa "avisa", así que no hace falta ningún color nuevo.
@@ -177,8 +254,12 @@ def show_results(results: list[dict], total_time: float, version: str = VERSION,
     for cambio, cuantos in _por_modelo(results).items():
         used, instead_of, reason = cambio
         plural = "document" if cuantos == 1 else "documents"
+        # El motivo es el predicado entero, no un complemento: "had no quota" se lee,
+        # pero "had failed" no es ingles, y `reason` vale las dos cosas. El valor crudo
+        # se queda como esta para --json.
+        dicho = f"had {reason}" if reason == "no quota" else reason
         warnings.append(("", None, f"{cuantos} {plural} refined with {used} — "
-                                   f"{instead_of} had {reason}"))
+                                   f"{instead_of} {dicho}"))
     if warnings:
         parts.append(Text("Warnings", style=f"bold {YELLOW}"))
         # Rejilla en vez de líneas sueltas: un aviso largo se partía y la segunda
@@ -191,7 +272,10 @@ def show_results(results: list[dict], total_time: float, version: str = VERSION,
         for lang, source, msg in warnings:
             fila = [lang]
             if multi:
-                fila.append(source or "—")
+                # Vacio y no "—": las unicas filas sin fuente son las que ya no hablan
+                # de un documento suelto (el aviso agrupado, el cambio de modelo), y
+                # ahi el guion se leia como "fuente desconocida".
+                fila.append(source or "")
             fila.append(msg)
             warn_grid.add_row(*fila)
         parts.append(warn_grid)

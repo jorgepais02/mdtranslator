@@ -115,3 +115,63 @@ def test_un_config_roto_no_revienta_la_pregunta(tmp_path, monkeypatch):
     monkeypatch.setattr(folder_picker, "PROJECT_ROOT", tmp_path)
     (tmp_path / "config.json").write_text("{esto no es json", encoding="utf-8")
     assert folder_picker.configured_folder() == ("", "")
+
+
+# ── navegar: la raiz tiene alias y tiene id ───────────────────────────────────
+
+class _DriveFalso:
+    """Lo justo de GoogleDocsManager para navegar: Mi unidad con una subcarpeta."""
+
+    RAIZ = "id-real-de-mi-unidad"
+
+    def __init__(self):
+        self.arbol = {
+            folder_picker.ROOT: [{"id": "id-usal", "name": "USAL"}],
+            self.RAIZ:          [{"id": "id-usal", "name": "USAL"}],
+            "id-usal":          [],
+        }
+        self.info = {
+            folder_picker.ROOT: {"id": self.RAIZ, "name": "My Drive", "parents": []},
+            self.RAIZ:          {"id": self.RAIZ, "name": "My Drive", "parents": []},
+            "id-usal":          {"id": "id-usal", "name": "USAL", "parents": [self.RAIZ]},
+        }
+
+    def list_subfolders(self, fid):
+        return self.arbol[fid]
+
+    def get_folder_info(self, fid):
+        return self.info[fid]
+
+
+def test_al_volver_a_la_raiz_no_se_ofrece_subir_mas(monkeypatch):
+    # El padre de una carpeta de primer nivel es "Mi unidad" con su id real, no el
+    # alias "root": al subir, la raíz dejaba de parecer la raíz y "Up one level"
+    # seguía en la lista sin nada a donde subir.
+    listas = []
+    guion = iter(["USAL/", folder_picker._UP, folder_picker._CANCEL])
+
+    def ask_select_falso(label, choices, **kw):
+        listas.append([str(c) for c in choices])
+        return next(guion)
+
+    monkeypatch.setattr(folder_picker, "ask_select", ask_select_falso)
+    monkeypatch.setattr(folder_picker, "_pintar", lambda *a, **k: None)
+
+    assert folder_picker.pick_drive_folder(manager=_DriveFalso()) is None
+    assert folder_picker._UP not in listas[0]
+    assert folder_picker._UP in listas[1]
+    assert folder_picker._UP not in listas[2]
+
+
+def test_el_selector_no_apila_una_cabecera_por_nivel(monkeypatch):
+    # Cada nivel dejaba su cabecera y su filete en pantalla: bajar tres carpetas eran
+    # tres preguntas iguales apiladas y la lista viva quedaba al final de la columna.
+    pintadas = []
+    guion = iter(["USAL/", folder_picker._CANCEL])
+    monkeypatch.setattr(folder_picker, "ask_select", lambda *a, **k: next(guion))
+    monkeypatch.setattr(folder_picker, "clear_screen", lambda: pintadas.append("limpia"))
+    monkeypatch.setattr(folder_picker.console, "print", lambda *a, **k: None)
+
+    folder_picker.pick_drive_folder(manager=_DriveFalso())
+
+    assert pintadas.count("limpia") == 2      # una pantalla por nivel, no dos encima

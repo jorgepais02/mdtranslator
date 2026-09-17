@@ -98,14 +98,14 @@ class GoogleDocsManager:
                         "Please download it from Google Cloud Console and place it in secrets/credentials.json"
                     )
                 flow = InstalledAppFlow.from_client_secrets_file(self.credentials_path, SCOPES)
-                self._console.print("\n[bold yellow]Google Drive — autorización requerida[/bold yellow]")
-                self._console.print("[dim]Abriendo el navegador… si no se abre automáticamente, visita la URL que aparece a continuación.[/dim]")
+                self._console.print("\n[bold yellow]Google Drive — authorization required[/bold yellow]")
+                self._console.print("[dim]Opening the browser… if it does not open, visit the URL below.[/dim]")
                 # Una app en modo «Testing» invalida el refresh token cada 7 días, así
                 # que esto reaparece cada semana aunque no hayas tocado nada.
                 self._console.print(
-                    "[dim]Si esto te lo pide cada pocos días: publica la app en Google Cloud "
-                    "Console › OAuth consent screen › Publish app. En modo Testing el permiso "
-                    "caduca cada 7 días.[/dim]\n")
+                    "[dim]If this asks every few days: publish the app in Google Cloud "
+                    "Console › OAuth consent screen › Publish app. In Testing mode the "
+                    "grant expires every 7 days.[/dim]\n")
                 try:
                     captured = io.StringIO()
                     with contextlib.redirect_stdout(captured):
@@ -115,11 +115,11 @@ class GoogleDocsManager:
                     if url_match:
                         self._console.print(f"[blue]{url_match.group(0)}[/blue]\n")
                     if creds and creds.valid:
-                        self._console.print("[green]✓ Autorización completada.[/green]\n")
+                        self._console.print("[green]✓ Authorization complete.[/green]\n")
                     else:
-                        self._console.print("[yellow]⚠ Autorización incompleta.[/yellow]\n")
+                        self._console.print("[yellow]⚠ Authorization incomplete.[/yellow]\n")
                 except Exception as e:
-                    self._console.print(f"[red]✗ Error durante la autorización: {e}[/red]\n")
+                    self._console.print(f"[red]✗ Authorization failed: {e}[/red]\n")
                     raise
             with open(self.token_path, 'wb') as token:
                 pickle.dump(creds, token)

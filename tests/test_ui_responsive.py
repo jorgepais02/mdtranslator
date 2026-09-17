@@ -186,3 +186,54 @@ def test_el_resumen_no_se_parte_en_dos_lineas(a_ancho):
     lineas = a_ancho(v, 40)
     assert lineas[1].strip().startswith(("0 of", "parsed"))
     assert lineas[2].strip() == ""
+
+
+# ── la pantalla final ─────────────────────────────────────────────────────────
+
+_TITULO = "6. Jaulas de Faraday en investigaciones forenses DFIR (I)"
+
+
+def _resultados(n=3):
+    return [{"lang": l, "source": f"{i}. {_TITULO}.md", "file": f"{i}. {_TITULO}.{l.lower()}.docx",
+             "ok": True, "time": 1.0, "gdocs_url": None, "warning": None,
+             "incomplete": False, "refine_model": None}
+            for i in range(n) for l in ("EN", "ES")]
+
+
+def _pintar_resultados(resultados, ancho, monkeypatch):
+    from cli import results as results_mod
+    c = Console(file=io.StringIO(), width=ancho, force_terminal=False, no_color=True)
+    monkeypatch.setattr(results_mod, "console", c)
+    results_mod.show_results(resultados, 2.0)
+    return c.file.getvalue().splitlines()
+
+
+@pytest.mark.parametrize("ancho", [120, 100, 80, 60, 50])
+def test_la_tabla_final_no_envuelve_los_nombres(ancho, monkeypatch):
+    # Con los nombres en crudo cada fila ocupaba tres renglones —SOURCE y FILE son
+    # casi la misma cadena— y un módulo entero eran cuarenta y cinco líneas de tabla
+    # con el pie fuera de la pantalla.
+    lineas = _pintar_resultados(_resultados(), ancho, monkeypatch)
+    filas = [l for l in lineas if l.startswith("│") and "LANG" not in l]
+    assert len(filas) == 6                       # una línea por tarea, ni una más
+    assert all(len(l) <= ancho for l in lineas)
+
+
+def test_en_un_terminal_estrecho_desaparece_la_columna_del_fichero(monkeypatch):
+    # El nombre de salida es el de la fuente con el idioma detrás: de las dos
+    # columnas, la que se puede deducir es FILE. Antes que recortar las dos hasta
+    # dejarlas ilegibles, se va una.
+    lineas = _pintar_resultados(_resultados(2), 60, monkeypatch)
+    cabecera = next(l for l in lineas if "LANG" in l)
+    assert "FILE" not in cabecera
+    assert "SOURCE" in cabecera
+
+
+def test_con_un_solo_fichero_no_hay_columna_de_fuente(monkeypatch):
+    uno = [{"lang": "EN", "source": "apuntes.md", "file": "apuntes.en.docx", "ok": True,
+            "time": 1.0, "gdocs_url": None, "warning": None, "incomplete": False,
+            "refine_model": None}]
+    lineas = _pintar_resultados(uno, 80, monkeypatch)
+    cabecera = next(l for l in lineas if "LANG" in l)
+    assert "SOURCE" not in cabecera and "FILE" in cabecera
+    assert all(len(l) <= 80 for l in lineas)

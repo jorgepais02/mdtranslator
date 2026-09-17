@@ -99,3 +99,37 @@ def test_un_503_de_drive_sigue_diciendo_drive():
     aviso = _short_warning("<HttpError 503 when requesting "
                            "https://www.googleapis.com/upload/drive/v3/files>")
     assert "Google Drive" in aviso
+
+
+def test_un_429_del_traductor_gemini_no_se_anuncia_como_falta_de_refinado():
+    # Medido con --lang XX: los tres proveedores caen, y el mensaje agregado lleva
+    # dentro el RESOURCE_EXHAUSTED del traductor Gemini. La pantalla decia
+    # "Gemini quota exceeded — text not refined" en un documento que no habia
+    # llegado ni a traducirse, y mandaba a mirar la cuota del refinado.
+    from cli.results import _short_warning
+    aviso = _short_warning(
+        "All translation providers failed:\n"
+        "  CachingTranslator: DeepL API request failed: 400 Client Error: Bad Request\n"
+        "  CachingTranslator: Azure API request failed: 400 — "
+        '{"error":{"code":400036,"message":"The target language is not valid."}}\n'
+        "  CachingTranslator: Gemini API request failed: 429 RESOURCE_EXHAUSTED. "
+        "Quota exceeded for metric: generate_content_free_tier_requests, limit: 20")
+    assert "refined" not in aviso
+    assert "Target language" in aviso
+
+
+def test_si_todos_los_proveedores_caen_por_cuota_el_aviso_lo_dice():
+    from cli.results import _short_warning
+    aviso = _short_warning(
+        "All translation providers failed:\n"
+        "  CachingTranslator: DeepL quota exceeded.\n"
+        "  CachingTranslator: Azure API request failed: 429 Too Many Requests")
+    assert "out of quota" in aviso
+
+
+def test_un_fallo_de_traduccion_que_no_es_cuota_manda_a_mirar_las_claves():
+    from cli.results import _short_warning
+    aviso = _short_warning(
+        "All translation providers failed:\n"
+        "  CachingTranslator: DeepL API request failed: 403 Forbidden")
+    assert aviso == "All translation providers failed — check API keys and quotas"

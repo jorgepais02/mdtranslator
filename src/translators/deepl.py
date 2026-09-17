@@ -14,6 +14,9 @@ class DeepLTranslator(BaseTranslator):
     name = "deepl"
     lang_codes = PROVIDER_CODES["deepl"]
     supported  = SUPPORTED["deepl"]
+    key_env    = "DEEPL_API_KEY"
+    signup     = "https://www.deepl.com/pro-api"
+    free       = "500,000 characters/month"
 
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.getenv("DEEPL_API_KEY", "")

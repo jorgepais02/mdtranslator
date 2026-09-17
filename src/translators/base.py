@@ -113,6 +113,15 @@ class BaseTranslator(ABC):
     lang_codes: dict[str, str] = {}
     supported:  frozenset[str] | None = None
 
+    # Lo que hace falta para darle de alta una clave, aqui y no en una constante
+    # aparte: la leccion del menu del wizard es que un proveedor tiene que ser una
+    # fila. `extra_env` son los valores que la API pide **ademas** de la clave —Azure
+    # no funciona sin su region— como (variable, etiqueta, valor por defecto).
+    key_env:   str = ""
+    extra_env: tuple[tuple[str, str, str], ...] = ()
+    signup:    str = ""          # la pagina donde se saca la clave
+    free:      str = ""          # que da el plan gratuito, en una linea
+
     def api_lang(self, code: str) -> str:
         """Codigo de la interfaz → codigo de este proveedor. API: str."""
         return self.lang_codes.get(code.upper(), code)
