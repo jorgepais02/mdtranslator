@@ -10,6 +10,17 @@ def _short_warning(msg: str) -> str:
     msg = str(msg)
     lo  = msg.lower()
 
+    # ── Modelos de IA (refinado) ──────────────────────────────────────
+    # Con varios modelos en la lista, el aviso ya no es de Gemini sino del conjunto:
+    # decir "Gemini quota exceeded" cuando tambien se intento con Groq seria mentir
+    # sobre lo que hay que arreglar.
+    if "no quota left on any model" in lo:
+        return "No AI model has quota left — text not refined"
+    if "no ai model configured" in lo:
+        return "No AI model configured — add a key to .env (e.g. GEMINI_API_KEY)"
+    if "no ai model answered" in lo:
+        return "No AI model answered — text not refined"
+
     # ── Gemini refiner ────────────────────────────────────────────────
     if "resource_exhausted" in lo or ("quota" in lo and "gemini" in lo) \
             or ("429" in msg and "gemini" in lo):
@@ -68,6 +79,18 @@ def _short_warning(msg: str) -> str:
         return msg
     cut = msg[:77].rsplit(" ", 1)[0]
     return cut + "…"
+
+
+def _por_modelo(results: list[dict]) -> dict[tuple, int]:
+    """Cuántos documentos refinó cada modelo que no era el preferido. API: dict."""
+    cuenta: dict[tuple, int] = {}
+    for r in results:
+        cambio = r.get("refine_model")
+        if not cambio:
+            continue
+        clave = (cambio["used"], cambio["instead_of"], cambio["reason"])
+        cuenta[clave] = cuenta.get(clave, 0) + 1
+    return cuenta
 
 
 def show_results(results: list[dict], total_time: float, version: str = VERSION,
@@ -142,7 +165,20 @@ def show_results(results: list[dict], total_time: float, version: str = VERSION,
         parts.append(Text())
 
     # ── Warnings ──────────────────────────────────────────────────────
-    warnings = [(r["lang"], r.get("source"), r["warning"]) for r in results if r.get("warning")]
+    warnings = [(r["lang"], r.get("source"), _short_warning(r["warning"]))
+                for r in results if r.get("warning")]
+    # El modelo con el que se refinó es un aviso más, y solo aparece cuando no fue el
+    # preferido: "salió, pero no del que pediste" es justo lo que hay que contar, y
+    # amarillo ya significa "avisa", así que no hace falta ningún color nuevo.
+    #
+    # Va en **una** línea por cambio, no una por documento: con dieciséis tareas en
+    # árabe y chino eran dieciséis filas idénticas debajo de la tabla, y la línea que
+    # de verdad se lee es cuántos documentos salieron de otro modelo.
+    for cambio, cuantos in _por_modelo(results).items():
+        used, instead_of, reason = cambio
+        plural = "document" if cuantos == 1 else "documents"
+        warnings.append(("", None, f"{cuantos} {plural} refined with {used} — "
+                                   f"{instead_of} had {reason}"))
     if warnings:
         parts.append(Text("Warnings", style=f"bold {YELLOW}"))
         # Rejilla en vez de líneas sueltas: un aviso largo se partía y la segunda
@@ -156,7 +192,7 @@ def show_results(results: list[dict], total_time: float, version: str = VERSION,
             fila = [lang]
             if multi:
                 fila.append(source or "—")
-            fila.append(_short_warning(msg))
+            fila.append(msg)
             warn_grid.add_row(*fila)
         parts.append(warn_grid)
         parts.append(Text())

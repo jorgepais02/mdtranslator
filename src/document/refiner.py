@@ -1,27 +1,37 @@
 """
-Refinamiento nodo a nodo de MD traducido con Gemini.
+Refinamiento nodo a nodo de MD traducido con un modelo de IA (ver src/ai/).
 
 Estrategia:
   - Parsear el MD en nodos tipados
-  - Mandar a Gemini SOLO texto plano (paragraph, list_item, blockquote)
-  - Los inline spans se extraen como placeholders antes de Gemini
+  - Mandar al modelo SOLO texto plano (paragraph, list_item, blockquote)
+  - Los inline spans se extraen como placeholders antes de la llamada
   - El MD de salida es estructuralmente idéntico al de entrada
 
 Nodos refinables:  paragraph, list_item, blockquote
 Nodos intocables:  heading, code_block, table, hr, blank, frontmatter
 
 API:
-    refine_markdown(lines, lang_code, cache=None, cancelado=None) -> (lineas, aviso)
+    refine_markdown(lines, lang_code, cache=None, cancelado=None)
+        -> (lineas, aviso, cambio_de_modelo)
 CLI:
     python -m src.document.refiner input.md lang_code
 """
 
-import os, re, time
+import re, time
 from dataclasses import dataclass
 from typing import Literal
-from google import genai
-from google.genai import types
 from rich.console import Console
+
+# Dos formas de llegar aqui: importado por la CLI (con src/ en sys.path) o ejecutado
+# con python -m src.document.refiner. El relativo solo vale en el segundo caso.
+try:
+    from ..ai.base import (MAX_ESPERA, MAX_INTENTOS, PISTAS_CUOTA, AIError,
+                           cambio_de_modelo, espera_pedida)
+    from ..ai.registry import get_model
+except ImportError:
+    from ai.base import (MAX_ESPERA, MAX_INTENTOS, PISTAS_CUOTA, AIError,
+                         cambio_de_modelo, espera_pedida)
+    from ai.registry import get_model
 
 console = Console(stderr=True)
 
@@ -128,28 +138,25 @@ SYSTEM = (
 BATCH = 25
 
 # La caché de refinamiento comparte tabla con la de traducción: su clave es
-# (texto, idioma, proveedor), así que el proveedor hace de namespace. Lo que Gemini
-# ya refinó no se vuelve a pagar, y por eso relanzar un lote que murió a la mitad
-# solo repite lo que falta.
+# (texto, idioma, proveedor), así que el proveedor hace de namespace. Lo que ya se
+# refinó no se vuelve a pagar, y por eso relanzar un lote que murió a la mitad solo
+# repite lo que falta.
+#
+# El namespace sigue siendo "gemini-refine" aunque hoy pueda refinar cualquier modelo,
+# y **no** lleva el id del modelo: metérselo invalidaría todo lo refinado hasta ahora
+# (~23s por documento otra vez), por el mismo motivo por el que la clave de traducción
+# no lleva source_lang. A cambio, un texto refinado por Cerebras se reutiliza aunque
+# mañana el preferido sea Gemini — es un texto ya editado, no una traducción cruda.
 CACHE_PROVIDER = "gemini-refine"
 
 # Cuando salta el 429, el propio error dice cuánto falta para que se libere hueco
 # (`retryDelay`), y ese número baja en cada intento: medido, 59s → 34s → 9s. Esperar
 # lo que pide y reintentar recupera la petición; rendirse al primer 429 deja el
-# documento sin refinar teniendo la cuota a un minuto de distancia.
-_RETRY_DELAY_RE = re.compile(r"'retryDelay':\s*'(\d+)s'")
-_MAX_INTENTOS   = 2
-_MAX_ESPERA     = 60          # s: por encima de esto, mejor avisar que colgar el lote
-_PASO_ESPERA    = 1           # s: se duerme a trocitos para poder atender un Ctrl+C
-
-
-def _espera_pedida(error: Exception) -> int | None:
-    """Los segundos que pide un 429, o None si el error es de otra cosa."""
-    texto = str(error)
-    if "429" not in texto and "RESOURCE_EXHAUSTED" not in texto:
-        return None
-    m = _RETRY_DELAY_RE.search(texto)
-    return min(int(m.group(1)) + 1, _MAX_ESPERA) if m else _MAX_ESPERA
+# documento sin refinar teniendo la cuota a un minuto de distancia. La lectura de ese
+# número vive en ai/base.py, porque cada API lo cuenta a su manera.
+_MAX_INTENTOS = MAX_INTENTOS
+_MAX_ESPERA   = MAX_ESPERA
+_PASO_ESPERA  = 1             # s: se duerme a trocitos para poder atender un Ctrl+C
 
 
 def es_aviso_de_cuota(aviso: str | None) -> bool:
@@ -162,7 +169,7 @@ def es_aviso_de_cuota(aviso: str | None) -> bool:
     if not aviso:
         return False
     t = str(aviso).lower()
-    return "429" in t or "resource_exhausted" in t
+    return any(pista in t for pista in PISTAS_CUOTA)
 
 
 def _dormir(segundos: int, cancelado) -> bool:
@@ -173,15 +180,22 @@ def _dormir(segundos: int, cancelado) -> bool:
         time.sleep(_PASO_ESPERA)
     return True
 
-def _call_gemini(texts: list[str], lang: str, client, cancelado=None) -> tuple[list[str], str | None]:
+def _llamar_modelo(texts: list[str], lang: str, modelo, cancelado=None) -> tuple[list[str], str | None]:
+    """Un lote refinado, reintentando si lo que falla es la cuota.
+
+    El orden importa: con varios modelos configurados, la lista entera se prueba
+    **sin dormir** (lo hace FallbackModel) y solo se llega a esta espera cuando
+    ninguno tiene cuota. Al reves —esperar 60s con el primero antes de probar el
+    segundo— eran hasta 120s por lote para acabar usando uno que estaba libre.
+    """
     if not texts:
         return [], None
     ultimo: Exception | None = None
     for intento in range(_MAX_INTENTOS):
         try:
-            return _una_llamada(texts, lang, client)
+            return _una_llamada(texts, lang, modelo)
         except Exception as e:
-            espera = _espera_pedida(e)
+            espera = espera_pedida(e)
             if espera is None or intento == _MAX_INTENTOS - 1:
                 raise
             ultimo = e
@@ -190,31 +204,27 @@ def _call_gemini(texts: list[str], lang: str, client, cancelado=None) -> tuple[l
     raise ultimo          # inalcanzable, pero deja claro que aquí no se devuelve None
 
 
-def _una_llamada(texts: list[str], lang: str, client) -> tuple[list[str], str | None]:
+def _una_llamada(texts: list[str], lang: str, modelo) -> tuple[list[str], str | None]:
     numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
-    resp = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=f"Refine these {len(texts)} lines:\n\n{numbered}",
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM.format(lang=lang.upper()),
-            temperature=0.2,
-        ),
+    raw = modelo.complete(
+        f"Refine these {len(texts)} lines:\n\n{numbered}",
+        system=SYSTEM.format(lang=lang.upper()),
+        temperature=0.2,
     )
-    raw = resp.text or ""
     out = []
     for line in raw.strip().splitlines():
         m = re.match(r'^\d+\.\s+(.*)', line)
         if m:
             out.append(m.group(1))
     if len(out) != len(texts):
-        return texts, f"Gemini returned {len(out)}/{len(texts)} lines"
+        return texts, f"{modelo.ref} returned {len(out)}/{len(texts)} lines"
     return out, None
 
 
 REFINABLE = {"paragraph", "list_item", "blockquote"}
 
 
-def _refinar(textos: list[str], lang_code: str, client, cache, cancelado):
+def _refinar(textos: list[str], lang_code: str, modelo, cache, cancelado):
     """Los textos refinados en el mismo orden, o (None, aviso).
 
     Lo que ya está en caché no viaja, y las líneas repetidas dentro del documento
@@ -230,7 +240,7 @@ def _refinar(textos: list[str], lang_code: str, client, cache, cancelado):
     faltan = [t for t in dict.fromkeys(textos) if t not in hechos]
     for start in range(0, len(faltan), BATCH):
         lote = faltan[start:start + BATCH]
-        salida, aviso = _call_gemini(lote, lang_code, client, cancelado)
+        salida, aviso = _llamar_modelo(lote, lang_code, modelo, cancelado)
         if aviso:
             return None, aviso
         if cache is not None:
@@ -241,20 +251,21 @@ def _refinar(textos: list[str], lang_code: str, client, cache, cancelado):
 
 
 def refine_markdown(lines: list[str], lang_code: str, cache=None,
-                    cancelado=None) -> tuple[list[str], str | None]:
-    """Refina un MD traducido. Devuelve (líneas, warning_o_None) sin imprimir nada.
+                    cancelado=None) -> tuple[list[str], str | None, dict | None]:
+    """Refina un MD traducido. Devuelve (líneas, warning_o_None, cambio_de_modelo).
 
     cache     — cualquier objeto con get(texto, lang, proveedor) y set_many(pares, …);
                 sin él el refinamiento funciona igual, pero se paga cada vez
     cancelado — callable que dice si hay que abandonar mientras se espera un 429
+
+    El tercer valor solo trae algo cuando **no** contestó el modelo preferido: si el
+    resultado sale del primero de la lista no hay nada que contar, y la pantalla final
+    únicamente habla del modelo cuando cambió.
     """
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        return lines, "GEMINI_API_KEY not set"
     try:
-        client = genai.Client(api_key=api_key)
-    except Exception as e:
-        return lines, f"Gemini init failed: {e}"
+        modelo = get_model()
+    except AIError as e:
+        return lines, str(e), None
 
     nodes = parse_nodes(lines)
     idxs, texts, imaps = [], [], []
@@ -266,30 +277,40 @@ def refine_markdown(lines: list[str], lang_code: str, cache=None,
             imaps.append(tok)
 
     try:
-        refined, warn = _refinar(texts, lang_code, client, cache, cancelado)
+        refined, warn = _refinar(texts, lang_code, modelo, cache, cancelado)
         if warn:
-            return lines, warn
+            return lines, warn, cambio_de_modelo(modelo)
     except Exception as e:
         # Con el mensaje pelado, un 503 de Gemini llegaba a la tabla final como
-        # "Google Drive server error": el aviso tiene que decir de donde viene.
-        return lines, f"Gemini: {e}"
+        # "Google Drive server error": el aviso tiene que decir de donde viene. Los
+        # modelos lo traen delante (proveedor:modelo), asi que ya no hace falta
+        # anadirselo aqui.
+        return lines, str(e) if isinstance(e, AIError) else f"Gemini: {e}", None
 
     for pos, idx in enumerate(idxs):
         n = nodes[idx]
         restored = restore_inline(refined[pos], imaps[pos])
         nodes[idx] = Node(n.type, n.prefix + restored, restored, n.prefix)
 
-    return [n.raw for n in nodes], None
+    return [n.raw for n in nodes], None, cambio_de_modelo(modelo)
 
 
 if __name__ == "__main__":
     import sys
+    from pathlib import Path
+
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env", override=True)
     if len(sys.argv) < 3:
         print("Usage: python -m src.document.refiner input.md lang_code")
         sys.exit(1)
     with open(sys.argv[1]) as f:
         lines = f.read().splitlines()
-    result, warning = refine_markdown(lines, sys.argv[2])
+    result, warning, cambio = refine_markdown(lines, sys.argv[2])
     if warning:
         print(f"⚠ {warning}", file=sys.stderr)
+    if cambio:
+        print(f"⚠ refined with {cambio['used']} — {cambio['instead_of']} "
+              f"had {cambio['reason']}", file=sys.stderr)
     print("\n".join(result))

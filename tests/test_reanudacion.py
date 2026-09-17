@@ -11,32 +11,14 @@ import io
 import pytest
 from rich.console import Console
 
+from ai.base import AIError, AIModel, AIQuotaError, es_cuota
 from cli import main as cli_main
 from cli import results as results_mod
 from document import refiner
 
 
-# ── lo que pide un 429 ────────────────────────────────────────────────────────
-
-def test_del_429_se_saca_la_espera_que_pide():
-    e = Exception("429 RESOURCE_EXHAUSTED {'retryDelay': '34s'}")
-    # Un segundo de mas: esperar justo lo que dice la API vuelve a chocar con la ventana.
-    assert refiner._espera_pedida(e) == 35
-
-
-def test_un_429_sin_espera_cae_en_el_tope():
-    assert refiner._espera_pedida(Exception("429 RESOURCE_EXHAUSTED")) == refiner._MAX_ESPERA
-
-
-def test_una_espera_enorme_se_recorta_al_tope():
-    e = Exception("429 RESOURCE_EXHAUSTED {'retryDelay': '3600s'}")
-    assert refiner._espera_pedida(e) == refiner._MAX_ESPERA
-
-
-@pytest.mark.parametrize("mensaje", ["503 unavailable", "400 invalid api key", ""])
-def test_lo_que_no_es_cuota_no_se_reintenta(mensaje):
-    assert refiner._espera_pedida(Exception(mensaje)) is None
-
+# La lectura del 429 (cuanto pide, que no es cuota) vive en ai/base.py y se prueba en
+# tests/test_ai_models.py: aqui se prueba lo que el refinado hace con ella.
 
 def test_el_aviso_de_cuota_se_distingue_de_los_demas():
     assert refiner.es_aviso_de_cuota("Gemini: 429 RESOURCE_EXHAUSTED")
@@ -47,24 +29,23 @@ def test_el_aviso_de_cuota_se_distingue_de_los_demas():
 
 # ── el reintento ──────────────────────────────────────────────────────────────
 
-class ClienteFalso:
-    """Un cliente de Gemini que falla las primeras veces y luego contesta."""
+class ModeloFalso(AIModel):
+    """Un modelo que falla las primeras veces y luego contesta."""
 
     def __init__(self, fallos=0, error="429 RESOURCE_EXHAUSTED {'retryDelay': '2s'}"):
+        super().__init__(model="falso", name="falso")
         self.fallos = fallos
         self.error = error
         self.llamadas = 0
-        self.models = self
 
-    def generate_content(self, **kw):
+    def complete(self, prompt, system="", temperature=0.2):
         self.llamadas += 1
         if self.llamadas <= self.fallos:
-            raise RuntimeError(self.error)
-        pedidas = kw["contents"].strip().splitlines()
-        lineas = [l for l in pedidas if l[:1].isdigit()]
-        texto = "\n".join(f"{i+1}. refinado {l.split('. ', 1)[-1]}"
-                          for i, l in enumerate(lineas))
-        return type("R", (), {"text": texto})()
+            raise AIQuotaError(self.error) if es_cuota(Exception(self.error)) \
+                else AIError(self.error)
+        lineas = [l for l in prompt.strip().splitlines() if l[:1].isdigit()]
+        return "\n".join(f"{i+1}. refinado {l.split('. ', 1)[-1]}"
+                         for i, l in enumerate(lineas))
 
 
 @pytest.fixture
@@ -75,8 +56,8 @@ def sin_dormir(monkeypatch):
 
 
 def test_el_refinado_reintenta_tras_un_429(sin_dormir):
-    c = ClienteFalso(fallos=refiner._MAX_INTENTOS - 1)
-    salida, aviso = refiner._call_gemini(["uno", "dos"], "ar", c)
+    c = ModeloFalso(fallos=refiner._MAX_INTENTOS - 1)
+    salida, aviso = refiner._llamar_modelo(["uno", "dos"], "ar", c)
     assert aviso is None
     assert salida == ["refinado uno", "refinado dos"]
     assert c.llamadas == refiner._MAX_INTENTOS
@@ -84,25 +65,25 @@ def test_el_refinado_reintenta_tras_un_429(sin_dormir):
 
 
 def test_tras_los_intentos_el_429_se_propaga(sin_dormir):
-    c = ClienteFalso(fallos=99)
-    with pytest.raises(RuntimeError):
-        refiner._call_gemini(["uno"], "ar", c)
+    c = ModeloFalso(fallos=99)
+    with pytest.raises(AIError):
+        refiner._llamar_modelo(["uno"], "ar", c)
     assert c.llamadas == refiner._MAX_INTENTOS
 
 
 def test_un_error_que_no_es_cuota_no_gasta_intentos(sin_dormir):
-    c = ClienteFalso(fallos=99, error="400 invalid argument")
-    with pytest.raises(RuntimeError):
-        refiner._call_gemini(["uno"], "ar", c)
+    c = ModeloFalso(fallos=99, error="400 invalid argument")
+    with pytest.raises(AIError):
+        refiner._llamar_modelo(["uno"], "ar", c)
     assert c.llamadas == 1
     assert sin_dormir == []
 
 
 def test_cancelar_corta_la_espera(monkeypatch):
     monkeypatch.setattr(refiner.time, "sleep", lambda s: None)
-    c = ClienteFalso(fallos=99)
-    with pytest.raises(RuntimeError):
-        refiner._call_gemini(["uno"], "ar", c, cancelado=lambda: True)
+    c = ModeloFalso(fallos=99)
+    with pytest.raises(AIError):
+        refiner._llamar_modelo(["uno"], "ar", c, cancelado=lambda: True)
     assert c.llamadas == 1      # no reintenta lo que el usuario acaba de cancelar
 
 
@@ -120,9 +101,9 @@ class CacheFalsa:
 
 def test_lo_ya_refinado_no_vuelve_a_gemini():
     cache = CacheFalsa()
-    c1 = ClienteFalso()
+    c1 = ModeloFalso()
     salida1, _ = refiner._refinar(["uno", "dos"], "ar", c1, cache, None)
-    c2 = ClienteFalso()
+    c2 = ModeloFalso()
     salida2, _ = refiner._refinar(["uno", "dos"], "ar", c2, cache, None)
     assert salida1 == salida2
     assert c1.llamadas == 1 and c2.llamadas == 0
@@ -131,14 +112,14 @@ def test_lo_ya_refinado_no_vuelve_a_gemini():
 def test_solo_viaja_lo_que_falta():
     cache = CacheFalsa()
     cache.set_many([("uno", "ya estaba")], "ar", refiner.CACHE_PROVIDER)
-    c = ClienteFalso()
+    c = ModeloFalso()
     salida, _ = refiner._refinar(["uno", "dos"], "ar", c, cache, None)
     assert salida == ["ya estaba", "refinado dos"]
     assert c.llamadas == 1
 
 
 def test_una_linea_repetida_se_paga_una_vez():
-    c = ClienteFalso()
+    c = ModeloFalso()
     # "Fuente: INCIBE" sale veinte veces en unos apuntes; mandarla veinte veces era
     # gastar cuota en la misma frase.
     salida, _ = refiner._refinar(["a", "b", "a", "b"], "ar", c, CacheFalsa(), None)
@@ -147,7 +128,7 @@ def test_una_linea_repetida_se_paga_una_vez():
 
 
 def test_sin_cache_el_refinado_sigue_funcionando():
-    c = ClienteFalso()
+    c = ModeloFalso()
     salida, aviso = refiner._refinar(["uno"], "ar", c, None, None)
     assert aviso is None and salida == ["refinado uno"]
 

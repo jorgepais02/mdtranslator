@@ -8,10 +8,15 @@ CLI:
     python -m src.integrations.generate_md input.txt [-o output.md] [--lang es]
 """
 
-import argparse, os, re, sys
+import argparse, re, sys
 from pathlib import Path
-from google import genai
-from google.genai import types
+
+# Dos formas de llegar aqui: importado por la CLI (con src/ en sys.path) o ejecutado
+# con python -m src.integrations.generate_md. El relativo solo vale en el segundo caso.
+try:
+    from ..ai.registry import get_model
+except ImportError:
+    from ai.registry import get_model
 
 SYSTEM = """You are an academic note-taking assistant.
 Convert raw transcriptions into clean, structured Markdown notes.
@@ -48,21 +53,15 @@ def _validate(md: str) -> list[str]:
     return warnings
 
 def generate_markdown(text: str, lang: str = "es") -> str:
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise EnvironmentError("GEMINI_API_KEY not set")
+    """El .txt convertido en MD academico. API: str (lanza AIError si no hay modelo).
 
+    El modelo sale del registro (src/ai/), asi que el formateo hereda el fallback: el
+    429 del preferido ya no deja la fase 0 sin hacer teniendo otro modelo libre.
+    """
     lang_note = f"Write the notes in {lang.upper()}." if lang != "es" else ""
     prompt = f"{lang_note}\n\n{text}".strip()
 
-    client = genai.Client(api_key=api_key)
-    resp = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(system_instruction=SYSTEM, temperature=0.2),
-    )
-
-    md = _strip_fences(resp.text or "")
+    md = _strip_fences(get_model().complete(prompt, system=SYSTEM, temperature=0.2))
     for w in _validate(md):
         print(f"  Warning: {w}", file=sys.stderr)
 

@@ -15,6 +15,15 @@
     "max_workers": 4,
     "gemini_workers": 1
   },
+  "ai": {
+    "fallback_order": [
+      "gemini:gemini-2.5-flash",
+      "gemini:gemini-3.5-flash",
+      "gemini:gemini-3.5-flash-lite",
+      "groq",
+      "cerebras"
+    ]
+  },
   "document": {
     "header_image": null,
     "default_languages": [

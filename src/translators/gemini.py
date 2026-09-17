@@ -7,7 +7,13 @@ _NUM_PREFIX_RE = re.compile(r"^\d+\.\s*")
 
 
 class GeminiTranslator(BaseTranslator):
-    """Translator using Gemini (gemini-2.5-flash) with a technical translation prompt."""
+    """Translator using Gemini with a technical translation prompt.
+
+    El modelo lo dice el registro de src/ai/, pero **sin** fallback a otro modelo: en
+    el menu esto es el proveedor "Gemini (Google AI)", la traduccion ya tiene su
+    propio fallback por proveedor, y cambiarle el motor por dentro seria traducir con
+    otra cosa sin decirlo.
+    """
 
     name = "gemini"
     lang_codes = PROVIDER_CODES["gemini"]
@@ -33,14 +39,21 @@ class GeminiTranslator(BaseTranslator):
         "Lines to translate:\n{numbered}"
     )
 
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None):
         from google import genai
         from google.genai import types as _types
+        # Perezoso como el del SDK: saber quien tiene clave no deberia arrastrar el
+        # registro de modelos ni google.genai.
+        try:
+            from ..ai.registry import modelo_de
+        except ImportError:
+            from ai.registry import modelo_de
         self._api_key = api_key or os.getenv("GEMINI_API_KEY", "")
         if not self._api_key:
             raise TranslationError("GEMINI_API_KEY not found in .env")
         self._client = genai.Client(api_key=self._api_key)
         self._types = _types
+        self._model = model or modelo_de("gemini")
 
     def translate(self, texts: list[str], target_lang: str,
                   source_lang: str | None = None) -> list[str]:
@@ -58,7 +71,7 @@ class GeminiTranslator(BaseTranslator):
             if src_name:
                 prompt = f"The source text is written in {src_name}.\n" + prompt
             try:
-                response = self._client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+                response = self._client.models.generate_content(model=self._model, contents=prompt)
                 lines = [l.strip() for l in response.text.strip().splitlines() if l.strip()]
                 # If Gemini added commentary or blank lines, try keeping only numbered lines
                 if len(lines) != len(chunk):

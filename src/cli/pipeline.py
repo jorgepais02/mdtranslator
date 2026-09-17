@@ -679,6 +679,7 @@ def run_pipeline(config: dict) -> list[dict]:
             t_lang  = time.monotonic()
             ok      = True
             refined = True
+            cambio  = None          # con que modelo se refino, si no fue el preferido
             url     = None
             warning = doc.warning if is_source else None
 
@@ -711,7 +712,7 @@ def run_pipeline(config: dict) -> list[dict]:
                             if sin_cuota.is_set():
                                 refine_warn = "Gemini 429 quota exceeded — refining skipped"
                             else:
-                                rebuilt, refine_warn = refine_markdown(
+                                rebuilt, refine_warn, cambio = refine_markdown(
                                     rebuilt, lang, cache=refine_cache,
                                     cancelado=cancelled.is_set)
                         if refine_warn:
@@ -816,6 +817,9 @@ def run_pipeline(config: dict) -> list[dict]:
                 # pero le falta una pasada. Sin marcarlo, "lo que quedó por hacer" solo
                 # vivía en el aviso de la pantalla final y se perdía al cerrar el terminal.
                 "incomplete": bool(ok and not refined),
+                # Solo cuando contesto un modelo distinto del preferido: si salio del
+                # primero de la lista, decirlo seria ruido en todas las filas.
+                "refine_model": cambio,
             }
 
         # ── Phase 2 — one flat pool across every file and language ────────────
