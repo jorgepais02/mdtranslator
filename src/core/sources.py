@@ -122,7 +122,7 @@ def load_markdown(path: Path, allow_format: bool = True) -> tuple[str, str | Non
 
     try:
         from integrations.generate_md import generate_markdown
-        md = generate_markdown(raw.strip())
+        md = generate_markdown(raw.strip(), title=path.stem)
     except Exception as e:
         return raw, f"Gemini formatting failed for {path.name}: {e}"
 

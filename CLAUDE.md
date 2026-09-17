@@ -603,6 +603,28 @@ queden alineadas.
 - Con `organize_by_language: false` todos los idiomas comparten carpeta, así que
   `_effective_pattern` añade `{lang}` al patrón si no lo lleva → `12. apuntes (FR)`. Sin eso,
   los cuatro idiomas resolvían al mismo documento y se sobrescribían entre ellos.
+- El `(I)`/`(II)`/`(III)` que separa las partes de un mismo tema vive **solo en el nombre
+  del fichero**. El `.txt` es la transcripción hablada y no lo menciona, así que el modelo
+  que escribe el `#` del documento no tiene de dónde sacarlo: `SYSTEM` lo pedía desde el
+  primer commit y no podía cumplirse, porque `generate_markdown` recibía el texto y nunca
+  el nombre. Se vio en el módulo 19, con las tres partes de "Técnica de extracciones"
+  tituladas como tres temas sin relación **en los cinco idiomas** —el título se traduce, y
+  lo que no está en el origen no aparece en ninguna traducción—. El nombre en Drive nunca
+  lo perdió, porque sale del `stem` del fichero: el síntoma era un documento que por fuera
+  decía `(I)` y por dentro otra cosa.
+- El indicador **no es contenido, es la posición del documento en una serie**, y por eso
+  `core/parser.py` lo saca al leer (`quita_la_parte`, en `_prepare_one`) y lo vuelve a
+  poner al escribir (`conserva_la_parte`, con `doc.stem`). Al traductor no le incumbe:
+  mandándoselo, el árabe lo devolvía como `(الجزء الأول)` y el chino como `（一）` mientras
+  su hermano decía `（II）` —tres convenciones en la misma carpeta—, y además cambiaba la
+  traducción del título entero por haberle pegado un paréntesis: `Técnicas de Extracción
+  Invasivas` pasó de `侵入性提取技术` a `侵入性拔牙技术`, extracción **dental**. Sacándolo,
+  el texto que viaja es el de siempre, la caché sigue acertando y la serie se lee igual en
+  los cinco idiomas. `generate_markdown` lo recibe también —tercer argumento opcional,
+  como el `source_lang` de `translate()`— para que el `.md` de `sources/` lo lleve escrito.
+  Se impone en vez de pedirse: un modelo obedece casi siempre, y "casi siempre" aquí se ve
+  en la pantalla del usuario. Solo romanos hasta XX y arábigos de dos cifras, y anclado al
+  final: un título que acaba en `(DFIR)` o `(ECU)` no es la parte de nada.
 
 ### DOCX postprocess
 El DOCX lo genera Pandoc usando una template `.docx`. Luego `document/postprocess.py` lo
@@ -620,6 +642,15 @@ al final de una línea son un salto forzado en Markdown** y Pandoc los mete como
 en medio del párrafo. Gemini no los ponía; `openai/gpt-oss-120b` cierra con ellos casi
 cada línea, así que el defecto apareció el día que hubo clave de Groq. Mismo arreglo en
 `generate_md._strip_fences`, que formatea los `.txt` con el mismo modelo.
+
+Las llaves de los placeholders son **por línea** (`imaps[pos]`), pero el modelo edita un
+lote de 25: puede llevarse un `⟦0⟧` a la línea de al lado, o partirlo por dentro
+(`⟦0 lock⟧`). Entonces la vecina no tiene nada que restaurar y el símbolo llega al
+documento, mientras la línea de origen pierde su cursiva y, con ella, la palabra. Pasó en
+el módulo 19, en dos apuntes chinos que se subieron con `⟦0 lock⟧系统集…` a la vista. Por
+eso, al restaurar, una línea cuyas marcas no han vuelto **enteras** se queda con la
+traducción cruda: se lee, y `⟦0⟧` no. Refinar nunca puede dejar el documento peor de lo
+que estaba, que es la misma regla de `_conserva_lo_refinado()`.
 
 ### Limpieza en modo solo-Drive
 Cuando la salida es solo Drive, los ficheros locales son scratch. Se borran **solo los que

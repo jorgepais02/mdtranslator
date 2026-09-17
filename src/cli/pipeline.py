@@ -20,7 +20,8 @@ from translators import get_translator
 from translators.base import call_translate
 from translators.cache import TranslationCache
 from document.refiner import AVISO_SIN_CUOTA, es_aviso_de_cuota, refine_markdown
-from core.parser import parse_markdown_lines, rebuild_markdown_from_translations
+from core.parser import (conserva_la_parte, parse_markdown_lines, quita_la_parte,
+                         rebuild_markdown_from_translations)
 from core.docgen import generate_docx_document, convert_many_to_pdf
 from core.config import TRANSLATED_DIR, DRIVE_FOLDER_ID, CONFIG
 from core.sources import collect_sources, load_markdown, needs_formatting
@@ -512,6 +513,10 @@ def _prepare_one(path: Path, format_raw: bool, forced_lang: str | None,
     if not content.strip():
         return _failure(path, warning or f"{path.name} produced no content")
 
+    # El (I)/(II) del título sale de aquí y vuelve al escribir (conserva_la_parte): no es
+    # contenido, es la posición del documento en una serie, y al traductor no le incumbe.
+    content = quita_la_parte(content)
+
     doc = SourceDoc(path=path, content=content, warning=warning)
     try:
         doc.parsed = parse_markdown_lines(content.splitlines())
@@ -725,6 +730,11 @@ def run_pipeline(config: dict) -> list[dict]:
                                         sin_cuota.set()
 
                     new_content = "\n".join(rebuilt) + "\n"
+
+                # La serie se lee igual en los cinco idiomas porque la escribe el nombre
+                # del fichero, no el traductor. Va antes de comparar con el disco: si no,
+                # la comparación byte a byte diría que no ha cambiado nada.
+                new_content = conserva_la_parte(new_content, doc.stem)
 
                 if cancelled.is_set():
                     raise KeyboardInterrupt

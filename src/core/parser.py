@@ -13,6 +13,63 @@ TABLE_SEP_RE = re.compile(r"^\|?[\s|:\-]+\|[\s|:\-]*$")  # |---|---| rows
 
 LineInfo = tuple[str, str, str]
 
+# La parte de un tema repartido en varios apuntes, tal y como la escribe el nombre del
+# fichero: "… (I)", "… (II)", "… (III)". Solo romanos hasta XX y arábigos de dos cifras,
+# y anclado al final: un título que acaba en "(DFIR)" o "(ECU)" no es la parte de nada, y
+# colgársela al encabezado sería inventarse una serie que no existe.
+_ROMANOS  = sorted("I II III IV V VI VII VIII IX X XI XII XIII XIV XV XVI XVII XVIII XIX XX".split(),
+                   key=len, reverse=True)
+_PARTE_RE = re.compile(r"\s*\((" + "|".join(_ROMANOS) + r"|\d{1,2})\)\s*$")
+
+# Los espacios de los extremos, pero no el salto de línea: con \s* el final del patrón se
+# come el \n y el título se pega al párrafo siguiente.
+_H1_RE = re.compile(r"^(#[ \t]+)(.+?)[ \t]*$", re.MULTILINE)
+
+
+def parte_de(nombre: str) -> str:
+    """El indicador de parte de un nombre. API: "(II)", o "" si no lo lleva."""
+    m = _PARTE_RE.search(nombre)
+    return f"({m.group(1)})" if m else ""
+
+
+def quita_la_parte(md: str) -> str:
+    """El Markdown con el "(II)" fuera del título. API: str.
+
+    Se quita antes de traducir porque el indicador **no es contenido**: es la posición
+    del documento en una serie. Mandándoselo al traductor, el árabe lo convertía en
+    "(الجزء الأول)" y el chino en "（一）" mientras su hermano decía "（II）" — tres
+    convenciones en la misma carpeta. Y de paso el texto que viaja vuelve a ser el mismo
+    de siempre, así que la caché sigue acertando y la traducción no cambia por haberle
+    pegado un paréntesis: al añadirlo, "Técnicas de Extracción Invasivas" pasó de
+    "侵入性提取技术" a "侵入性拔牙技术" —extracción dental—.
+    """
+    m = _H1_RE.search(md)
+    if not m:
+        return md
+    limpio = _PARTE_RE.sub("", m.group(2))
+    return md[:m.start()] + f"{m.group(1)}{limpio}" + md[m.end():]
+
+
+def conserva_la_parte(md: str, nombre: str) -> str:
+    """El Markdown con el "(II)" del nombre del fichero pegado al título. API: str.
+
+    El (I)/(II)/(III) distingue las partes de un mismo tema y vive **solo en el nombre
+    del fichero**: el .txt es la transcripción hablada y no lo menciona, así que el
+    modelo que escribe el título no tiene de dónde sacarlo por mucho que se lo pidan.
+    Se impone en vez de pedirse porque un modelo obedece casi siempre, y "casi siempre"
+    aquí se ve en la pantalla del usuario.
+    """
+    parte = parte_de(nombre)
+    if not parte:
+        return md
+    m = _H1_RE.search(md)
+    if not m:
+        return md
+    # Si el modelo puso una parte por su cuenta manda la del fichero, o convivirían dos
+    # convenciones ("(2)" y "(II)") en la misma carpeta.
+    limpio = _PARTE_RE.sub("", m.group(2))
+    return md[:m.start()] + f"{m.group(1)}{limpio} {parte}" + md[m.end():]
+
 
 def parse_markdown_lines(lines: list[str]) -> list[LineInfo]:
     """Classify each Markdown line and extract translatable text.

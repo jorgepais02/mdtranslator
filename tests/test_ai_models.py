@@ -380,6 +380,38 @@ def test_el_refinado_no_deja_saltos_forzados_al_final_de_linea():
     assert out == ["primera linea refinada.", "segunda linea refinada."]
 
 
+# --------------------------------------------------------- marcas que el modelo mueve
+# Las llaves de extract_inline son por linea, pero el modelo edita el lote entero: se
+# lleva un "⟦0⟧" a la linea de al lado, o lo parte por dentro ("⟦0 lock⟧"). La vecina se
+# queda sin nada que restaurar y el simbolo llega al documento; la de origen pierde su
+# cursiva y, con ella, la palabra. Pasó en el módulo 19, en dos apuntes chinos.
+
+def test_una_marca_que_el_modelo_mueve_no_llega_al_documento(monkeypatch):
+    movida = Fijo(respuesta="1. sin cursiva ya.\n"
+                            "2. vecina con ⟦0⟧ prestado.\n"
+                            "3. roto ⟦0 lock⟧ aqui.")
+    monkeypatch.setattr(refiner, "get_model", lambda *a, **k: movida)
+
+    lineas = ["Un _termino_ en cursiva.", "", "Una vecina sin nada.", "", "Otro _termino_ mas."]
+    out, aviso, _ = refiner.refine_markdown(lineas, "zh")
+
+    assert aviso is None
+    # Esas lineas se quedan sin refinar a proposito: la traduccion cruda se lee, "⟦0⟧" no,
+    # y refinar nunca puede dejar el documento peor de lo que estaba.
+    assert out == lineas
+    assert "⟦" not in "\n".join(out) and "⟧" not in "\n".join(out)
+
+
+def test_una_marca_que_vuelve_entera_si_se_refina(monkeypatch):
+    """El guardia es para la marca rota, no para cualquier linea que lleve una."""
+    intacta = Fijo(respuesta="1. ahora con ⟦0⟧ y mejor escrito.")
+    monkeypatch.setattr(refiner, "get_model", lambda *a, **k: intacta)
+
+    out, aviso, _ = refiner.refine_markdown(["Un _termino_ en cursiva."], "zh")
+    assert aviso is None
+    assert out == ["ahora con _termino_ y mejor escrito."]
+
+
 def test_el_formateo_de_txt_tampoco_los_deja():
     from integrations.generate_md import _strip_fences
 

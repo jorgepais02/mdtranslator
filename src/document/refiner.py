@@ -301,6 +301,14 @@ def refine_markdown(lines: list[str], lang_code: str, cache=None,
     for pos, idx in enumerate(idxs):
         n = nodes[idx]
         restored = restore_inline(refined[pos], imaps[pos])
+        # Las llaves son por línea, pero el modelo edita el lote entero: mueve una marca
+        # a la línea de al lado, o la parte por dentro ("⟦0 lock⟧"). La vecina se queda
+        # sin nada que restaurar y el símbolo llega al documento; la de origen pierde su
+        # cursiva y, con ella, la palabra. Pasó en el módulo 19, en dos apuntes chinos.
+        # Esa línea se queda sin refinar a propósito: la traducción cruda se lee, "⟦0⟧"
+        # no, y refinar nunca puede dejar el documento peor de lo que estaba.
+        if any(k not in refined[pos] for k in imaps[pos]) or "⟦" in restored or "⟧" in restored:
+            continue
         nodes[idx] = Node(n.type, n.prefix + restored, restored, n.prefix)
 
     return [n.raw for n in nodes], None, cambio_de_modelo(modelo)
