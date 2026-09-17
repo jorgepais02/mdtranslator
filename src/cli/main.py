@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+import shlex
 import sys
 import time
 import json
@@ -15,12 +16,13 @@ from .confirmation import show_confirmation
 from .pipeline import run_pipeline
 from .results import show_results
 from .styles import LANGUAGES
-from .styles import console, clear_screen, RED, YELLOW
-from .folder_picker import run_set_folder, pick_drive_folder, save_folder_id
-from core.sources import ALL_FILES, collect_sources
+from .styles import console, clear_screen, RED, VERSION, YELLOW
+from .folder_picker import (configured_folder, pick_drive_folder, run_set_folder,
+                            save_folder_id)
+from core.sources import ALL_FILES, collect_sources, list_source_folders
 from core.config import DRIVE_FOLDER_ID
+from translators.registry import AVAILABLE_TRANSLATORS, get_available_translators
 
-VERSION = "2.1.0"
 
 _OUTPUT_MAP = {
     "local": "Local only",
@@ -75,13 +77,81 @@ def build_config_from_args(args) -> dict:
         "files":      [p.name for p in files],
     }
 
-def print_json_results(results: list[dict], total_time: float):
+_PISTAS_CUOTA = ("quota", "429", "resource_exhausted", "rate limit", "too many requests")
+
+
+def _es_fallo_de_cuota(warning: str | None) -> bool:
+    texto = str(warning or "").lower()
+    return any(p in texto for p in _PISTAS_CUOTA)
+
+
+def _retry_provider(config: dict, results: list[dict]) -> tuple[str, str | None]:
+    """Con que proveedor relanzar. API: (provider, nota para la pantalla final).
+
+    Elegir proveedor a mano desactiva el fallback a proposito: quien pide DeepL lo pide
+    por algo, y cambiarselo a mitad de ejecucion seria traducir con otro sin decirlo.
+    Pero entonces un 429 de ese proveedor deja el lote sin traducir y sin mencionar en
+    ninguna parte que hay otras claves cargadas que podrian acabarlo: el comando de
+    reintento las ofrece, y la nota dice por que ha cambiado.
+    """
+    provider = config.get("provider") or "auto"
+    if provider == "auto":
+        return provider, None
+    if not any(not r["ok"] and _es_fallo_de_cuota(r.get("warning")) for r in results):
+        return provider, None
+    otros = [t["name"] for t in get_available_translators() if t["id"] != provider]
+    if not otros:
+        return provider, None
+    nombre = AVAILABLE_TRANSLATORS.get(provider, (provider,))[0]
+    return "auto", (f"{nombre} ran out of quota — the command below switches to "
+                    f"whichever provider answers ({', '.join(otros)}).")
+
+
+def _retry_command(config: dict, provider: str | None = None) -> str:
+    """El comando que vuelve a lanzar esta misma ejecucion. API: una linea de shell.
+
+    Reanudar un lote es relanzarlo: la cache de traduccion y la de refinamiento hacen
+    que solo se repita lo que quedo sin hacer. Por eso el comando se escribe entero en
+    la pantalla final, en vez de dejar al usuario reconstruirlo de memoria.
+    """
+    partes = ["python -m src.cli.main"]
+    source = config.get("source")
+    if source == ALL_FILES:
+        partes.append("--all")
+    elif source:
+        partes.append(shlex.quote(str(source)))
+    if config.get("languages"):
+        partes.append("--lang " + " ".join(config["languages"]))
+    salida = {v: k for k, v in _OUTPUT_MAP.items()}.get(config.get("output", ""))
+    if salida:
+        partes.append(f"--output {salida}")
+    elegido  = config.get("provider") or "auto"
+    provider = provider or elegido
+    # "auto" es el modo por defecto y no hace falta escribirlo, salvo cuando es un
+    # cambio respecto a lo que pidio el usuario: entonces el comando tiene que
+    # ensenar en que se diferencia del que acaba de fallar.
+    if provider and (provider != "auto" or provider != elegido):
+        partes.append(f"--provider {provider}")
+    if config.get("source_lang"):
+        partes.append(f"--source-lang {config['source_lang']}")
+    partes.append("-y")
+    return " ".join(partes)
+
+
+def print_json_results(results: list[dict], total_time: float, retry_cmd: str | None = None):
     failed = sum(1 for r in results if not r["ok"])
-    print(json.dumps({
+    a_medias = [r for r in results if r.get("incomplete")]
+    salida = {
         "status":     "success" if not failed else "partial_success",
         "files":      results,
         "total_time": total_time,
-    }))
+    }
+    # Un lote lanzado desde un script tambien tiene que poder preguntar "¿quedo algo?"
+    # sin leerse la tabla: el comando de reintento viaja en el JSON.
+    if a_medias or failed:
+        salida["incomplete"]    = len(a_medias)
+        salida["retry_command"] = retry_cmd
+    print(json.dumps(salida))
 
 def _abort():
     clear_screen()
@@ -98,21 +168,35 @@ def main():
 _PROVIDER_MAP = {"Azure AI Translator": "azure", "DeepL API": "deepl", "Auto (fallback)": "auto"}
 
 def _ensure_drive_folder(config, interactive: bool) -> None:
-    """Drive necesita una carpeta destino: si no hay ninguna configurada, preguntarla."""
-    if "Google Drive" not in config["output"] or DRIVE_FOLDER_ID:
+    """Drive necesita una carpeta destino: si no hay ninguna, preguntarla.
+
+    El wizard ya la trae en la config (la pregunta cuando el destino incluye Drive),
+    asi que esto solo entra por el camino de los flags. No escribe config.json: eso lo
+    hace _remember_drive_folder cuando la ejecucion arranca de verdad.
+    """
+    if "Google Drive" not in config["output"]:
+        return
+    if config.get("drive_folder_id") or DRIVE_FOLDER_ID:
         return
     if not interactive:
         print("error: no Drive folder configured — run with --set-folder first", file=sys.stderr)
         sys.exit(2)
     console.print(f"\n[{YELLOW}]No hay ninguna carpeta de Drive configurada.[/{YELLOW}]")
-    folder_id = pick_drive_folder()
-    if not folder_id:
+    elegida = pick_drive_folder()
+    if not elegida:
         _abort()
-    save_folder_id(folder_id)
-    # CONFIG ya está cargado en memoria: el pipeline lee su propia copia del ID.
-    from . import pipeline as _pipeline
-    _pipeline.DRIVE_FOLDER_ID = folder_id
-    _pipeline.CONFIG.setdefault("drive", {})["folder_id"] = folder_id
+    config["drive_folder_id"], config["drive_folder_name"] = elegida
+
+
+def _remember_drive_folder(config) -> None:
+    """Guarda la carpeta de esta ejecucion como la de la proxima.
+
+    Se guarda al arrancar y no al elegirla: cancelar en la confirmacion no tiene que
+    dejar cambiada la carpeta de la siguiente vez.
+    """
+    elegida = (config.get("drive_folder_id") or "").strip()
+    if elegida and "Google Drive" in config["output"] and elegida != configured_folder()[0]:
+        save_folder_id(elegida, config.get("drive_folder_name"))
 
 
 def _run(args):
@@ -123,6 +207,11 @@ def _run(args):
     if args.json or args.lang or args.all:
         config = build_config_from_args(args)
     else:
+        # Sin nada en sources/ se dice aqui y no se abre el wizard: el wizard limpia la
+        # pantalla en cada paso, asi que un aviso suyo se borra antes de leerse.
+        if not args.file and not (collect_sources(ALL_FILES) or list_source_folders()):
+            print("error: no sources — put a .md or .txt in sources/", file=sys.stderr)
+            sys.exit(2)
         config = run_wizard(args.file)
 
     if config is None:
@@ -149,6 +238,7 @@ def _run(args):
             _ensure_drive_folder(config, interactive=True)
 
     # Stage 3 — Pipeline
+    _remember_drive_folder(config)
     if not args.json:
         clear_screen()
     start = time.monotonic()
@@ -168,13 +258,15 @@ def _run(args):
     total_time = time.monotonic() - start
 
     # Stage 4 — Results
+    retry_provider, retry_note = _retry_provider(config, results)
+    retry_cmd = _retry_command(config, retry_provider)
     if args.json:
-        print_json_results(results, total_time)
+        print_json_results(results, total_time, retry_cmd)
     else:
         clear_screen()
         console.print()
         console.print()
-        show_results(results, total_time)
+        show_results(results, total_time, retry_cmd=retry_cmd, retry_note=retry_note)
 
     sys.exit(0 if not any(not r["ok"] for r in results) else 1)
 

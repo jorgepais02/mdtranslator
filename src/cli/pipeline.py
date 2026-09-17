@@ -18,7 +18,8 @@ from .styles import (console, elide as _elide, status_style as _status_style,
 
 from translators import get_translator
 from translators.base import call_translate
-from document.refiner import refine_markdown
+from translators.cache import TranslationCache
+from document.refiner import es_aviso_de_cuota, refine_markdown
 from core.parser import parse_markdown_lines, rebuild_markdown_from_translations
 from core.docgen import generate_docx_document, convert_many_to_pdf
 from core.config import TRANSLATED_DIR, DRIVE_FOLDER_ID, CONFIG
@@ -477,6 +478,21 @@ class SourceDoc:
         return self.path.stem
 
 
+def _conserva_lo_refinado(out_file: Path, source: Path, refined: bool) -> bool:
+    """Si hay que dejar quieto el fichero de salida que ya existe. API: bool.
+
+    Solo cuando esta pasada no ha podido refinar y la fuente no ha cambiado desde que se
+    escribio: entonces lo que hay en disco es igual o mejor que lo que traemos. Si la
+    fuente es mas nueva, el fichero esta obsoleto y se reescribe aunque venga sin refinar.
+    """
+    if refined or not out_file.exists():
+        return False
+    try:
+        return source.stat().st_mtime <= out_file.stat().st_mtime
+    except OSError:
+        return False
+
+
 def _failure(path: Path, warning: str) -> dict:
     return {"lang": "—", "source": path.name, "file": "—", "ok": False,
             "time": 0.0, "gdocs_url": None, "warning": warning}
@@ -553,6 +569,9 @@ def run_pipeline(config: dict) -> list[dict]:
 
     use_google = "Google Drive" in output_cfg
     no_local   = output_cfg == "Google Drive"
+    # La carpeta elegida en esta ejecución manda sobre la del config: el wizard puede
+    # haber creado la del módulo nuevo un momento antes de llegar aquí.
+    drive_folder = (config.get("drive_folder_id") or "").strip() or DRIVE_FOLDER_ID
     pipe_cfg   = CONFIG.get("pipeline", {})
     max_workers = max(1, int(pipe_cfg.get("max_workers", DEFAULT_MAX_WORKERS)))
     # Presupuesto único de Gemini para toda la ejecución: el formateo de las fuentes y
@@ -570,6 +589,18 @@ def run_pipeline(config: dict) -> list[dict]:
         return all_results
 
     translator = get_translator(provider)
+    # La misma base que la caché de traducción: el refinamiento de Gemini es el trabajo
+    # más caro y escaso de la ejecución, y sin guardarlo un lote que muere a la mitad
+    # vuelve a pagarlo entero en el siguiente intento.
+    refine_cache = TranslationCache()
+
+    # Con la ventana de cuota saturada, cada documento se lleva su espera y no refina
+    # ninguno: dieciséis tareas serían media hora de relojes para acabar igual. Al
+    # segundo aviso de cuota se deja de intentar en esta ejecución; los que queden se
+    # marcan a medias y la pantalla final dice cómo recuperarlos.
+    sin_cuota = threading.Event()
+    avisos_cuota = 0
+    _UMBRAL_CUOTA = 2
     # Authenticate once; each thread builds its own service objects from shared creds
     if use_google:
         GoogleDocsManager.reset_run_state()   # los listados cacheados son de esta ejecución
@@ -637,7 +668,7 @@ def run_pipeline(config: dict) -> list[dict]:
                 live.refresh()
 
         def _run_task(doc: SourceDoc, lang: str, is_source: bool) -> dict:
-            nonlocal in_flight
+            nonlocal in_flight, avisos_cuota
             # short manda el formato del documento (RTL, CJK, plantilla); slug manda el
             # destino. Colapsar EN y EN-GB a "en" hacía que las dos tareas escribieran el
             # mismo fichero a la vez y subieran encima la una de la otra.
@@ -669,12 +700,28 @@ def run_pipeline(config: dict) -> list[dict]:
                     rebuilt    = rebuild_markdown_from_translations(doc.parsed, translated)
 
                     if needs_refine(lang):
+                        refine_warn = None
                         _update(doc, lang, is_source, "refining…")
+                        # gemini_sem serializa el refinamiento, asi que con muchas tareas
+                        # casi todas estan en la cola: el aviso de cuota llega cuando ya
+                        # han pasado el primer if y no lo verian nunca. Se vuelve a mirar
+                        # con el semaforo en la mano — medido con 16 tareas, era la
+                        # diferencia entre intentarlo 5 veces y intentarlo 2.
                         with gemini_sem:
-                            rebuilt, refine_warn = refine_markdown(rebuilt, lang)
+                            if sin_cuota.is_set():
+                                refine_warn = "Gemini 429 quota exceeded — refining skipped"
+                            else:
+                                rebuilt, refine_warn = refine_markdown(
+                                    rebuilt, lang, cache=refine_cache,
+                                    cancelado=cancelled.is_set)
                         if refine_warn:
                             warning = refine_warn
                             refined = False
+                            if es_aviso_de_cuota(refine_warn):
+                                with folders_lock:
+                                    avisos_cuota += 1
+                                    if avisos_cuota >= _UMBRAL_CUOTA:
+                                        sin_cuota.set()
 
                     new_content = "\n".join(rebuilt) + "\n"
 
@@ -692,7 +739,13 @@ def run_pipeline(config: dict) -> list[dict]:
                 with folders_lock:
                     scratch.update(f for f in (out_file, docx_file, pdf_file) if not f.exists())
 
-                if not out_file.exists() or out_file.read_text(encoding="utf-8") != new_content:
+                if _conserva_lo_refinado(out_file, doc.path, refined):
+                    # Relanzar para completar un lote no puede dejarte con menos de lo
+                    # que tenias. Sin esto, una segunda pasada sin cuota de Gemini
+                    # sobrescribia el documento ya refinado con la traduccion cruda:
+                    # medido, nueve documentos AR/ZH perdieron el refinado asi.
+                    new_content = out_file.read_text(encoding="utf-8")
+                elif not out_file.exists() or out_file.read_text(encoding="utf-8") != new_content:
                     out_file.write_text(new_content, encoding="utf-8")
 
                 if not docx_file.exists() or out_file.stat().st_mtime > docx_file.stat().st_mtime:
@@ -709,7 +762,7 @@ def run_pipeline(config: dict) -> list[dict]:
                 )
                 if upload and not cancelled.is_set():
                     _update(doc, lang, is_source, "uploading…")
-                    tgt = DRIVE_FOLDER_ID
+                    tgt = drive_folder
                     if CONFIG.get("drive", {}).get("organize_by_language"):
                         tgt = g_manager.resolve_language_folder(
                             tgt, slug, CONFIG["drive"].get("language_folder_names"))
@@ -759,6 +812,10 @@ def run_pipeline(config: dict) -> list[dict]:
                 "time":      elapsed,
                 "gdocs_url": url,
                 "warning":   warning,
+                # A medias no es lo mismo que fallido: el documento está subido y sirve,
+                # pero le falta una pasada. Sin marcarlo, "lo que quedó por hacer" solo
+                # vivía en el aviso de la pantalla final y se perdía al cerrar el terminal.
+                "incomplete": bool(ok and not refined),
             }
 
         # ── Phase 2 — one flat pool across every file and language ────────────

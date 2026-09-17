@@ -29,4 +29,7 @@ translated/
 sources/*
 !sources/.gitkeep
 
-
+# Integraciones personales: cada uno usa el pipeline con lo que quiera, y el repo no
+# depende de Slack. El importador y su comando no se comparten.
+tools/
+.claude/commands/

@@ -4,6 +4,7 @@ import io
 from pathlib import Path
 
 import pytest
+import questionary
 from rich.console import Console
 
 from cli import folder_picker, wizard
@@ -47,7 +48,7 @@ def test_lo_que_cabe_no_se_recorta_aunque_sea_largo(a_ancho):
     assert wizard._opciones([LARGO]) == [LARGO]
 
 
-# ── el resumen de lo ya contestado ────────────────────────────────────────────
+# ── las migas de lo ya contestado ─────────────────────────────────────────────
 
 def _estado(**extra):
     base = {"source": "apuntes.md", "provider": "Auto (fallback)",
@@ -58,50 +59,117 @@ def _estado(**extra):
 
 
 @pytest.mark.parametrize("ancho", [40, 60, 80, 120])
-def test_el_resumen_cabe(a_ancho, ancho):
+def test_las_migas_caben(a_ancho, ancho):
     c = a_ancho(ancho)
-    c.print(wizard._resumen(_estado(source=LARGO, files=[LARGO])))
+    c.print(wizard._migas(_estado(source=LARGO, files=[LARGO])))
     assert all(len(l.rstrip()) <= ancho for l in c.file.getvalue().splitlines())
 
 
-def test_el_resumen_es_una_linea_por_pregunta(a_ancho):
-    # Antes cada pregunta dejaba sus opciones enteras en pantalla: veinte líneas
-    # de opciones descartadas que ya no significaban nada.
+def test_las_migas_son_una_sola_linea(a_ancho):
+    # Antes cada pregunta dejaba sus opciones enteras en pantalla; luego fue una
+    # rejilla de una fila por respuesta. Cinco filas encima de la pregunta viva pesan
+    # tanto como ella: el contexto va en un renglón.
     c = a_ancho(80)
-    c.print(wizard._resumen(_estado()))
-    lineas = [l for l in c.file.getvalue().splitlines() if l.strip()]
-    assert len(lineas) == 4
+    c.print(wizard._migas(_estado()))
+    assert len([l for l in c.file.getvalue().splitlines() if l.strip()]) == 1
 
 
-def test_el_resumen_solo_ensena_lo_ya_contestado(a_ancho):
+def test_sin_nada_contestado_no_hay_migas():
+    assert wizard._migas({}) is None
+
+
+def test_las_migas_solo_ensenan_lo_ya_contestado(a_ancho):
     c = a_ancho(80)
-    c.print(wizard._resumen({"source": "apuntes.md", "files": ["apuntes.md"]}))
+    c.print(wizard._migas({"source": "apuntes.md", "files": ["apuntes.md"]}))
     texto = c.file.getvalue()
-    assert "apuntes.md" in texto and "Provider" not in texto
+    assert "apuntes.md" in texto and "Auto" not in texto
 
 
-def test_los_idiomas_van_en_cian_y_el_resto_un_escalon_por_debajo():
-    # Lo ya contestado no compite con la pregunta viva: el resumen baja a MUTED y el
-    # blanco se queda para lo que responde a la pregunta que está en pantalla.
-    from cli.styles import BRIGHT, CYAN, MUTED
-    assert wizard._valor("languages", _estado()).style == CYAN
-    assert wizard._valor("output", _estado()).style == MUTED
-    assert MUTED != BRIGHT
+def test_las_migas_van_en_los_dos_tonos_del_contexto():
+    # Un color, un rol: el dato en CONTEXT y los signos que lo separan en META. El
+    # cian de "esto es un idioma" no entra — está a dos pasos del azul de la marca y
+    # en la misma pantalla los dos dejaban de significar cosas distintas.
+    from cli.styles import CONTEXT, META
+    assert {s.style for s in wizard._migas(_estado()).spans} == {CONTEXT, META}
 
 
-def test_el_verde_ya_no_marca_la_respuesta(a_ancho):
+def test_el_verde_ya_no_marca_la_respuesta():
     # El verde significaba a la vez "elegido" y "salió bien": en cuanto la pantalla
     # se llenaba de verde, el ✓ del final dejaba de destacar.
     from cli.styles import GREEN
-    for clave in ("source", "provider", "output", "languages"):
-        assert wizard._valor(clave, _estado()).style != GREEN
+    assert all(s.style != GREEN for s in wizard._migas(_estado()).spans)
 
 
 def test_con_todos_los_ficheros_se_dice_cuantos_son(a_ancho):
     from core.sources import ALL_FILES
     c = a_ancho(80)
-    c.print(wizard._resumen(_estado(source=ALL_FILES, files=["a.md", "b.md"])))
+    c.print(wizard._migas(_estado(source=ALL_FILES, files=["a.md", "b.md"])))
     assert "all 2 files" in c.file.getvalue()
+
+
+# ── la cabecera y la lista de una pregunta ────────────────────────────────────
+
+def test_el_aire_entre_opciones_es_una_linea_vacia_de_verdad():
+    # Separator("") devuelve "---------------": `line or default` y la cadena vacía
+    # es falsa. Las tres listas cortas del wizard habrían salido con una fila de
+    # guiones entre cada opción.
+    from cli import prompts
+    huecos = [c for c in prompts._desplegar(["a", "b", "c"])[0]
+              if isinstance(c, questionary.Separator)]
+    assert huecos and all(not h.title.strip() for h in huecos)
+
+
+def test_una_lista_larga_va_apretada():
+    # Dieciocho idiomas con una línea en blanco entre cada uno son treinta y seis
+    # renglones: no cabe en ninguna ventana.
+    from cli import prompts
+    largo = [f"op{i}" for i in range(18)]
+    assert len(prompts._desplegar(largo)[0]) == len(largo)
+
+
+def test_el_subtitulo_lo_pintamos_nosotros():
+    # questionary sabe enseñar `description`, pero al pie de la lista, con un
+    # "Description:" delante y encendido siempre. Se le quita y se guarda aparte.
+    from cli import prompts
+    op = questionary.Choice(title="Auto (fallback)", value="auto",
+                            description="use whichever is configured")
+    opciones, subtitulos, _ = prompts._desplegar([op, "DeepL API"])
+    assert op.description is None
+    assert subtitulos == {0: "use whichever is configured"}
+
+
+def test_el_subtitulo_no_reserva_sitio_en_la_lista():
+    # En estado normal la separación entre opciones es siempre la misma; el subtítulo
+    # se inserta al señalar su opción y se quita al salir. Si reservara un hueco fijo,
+    # una lista apretada tendría un renglón vacío inexplicable debajo de esa opción.
+    from cli import prompts
+    largo = [f"op{i}" for i in range(18)]
+    largo[3] = questionary.Choice(title="op3", value="op3", description="algo")
+    opciones, subtitulos, aire = prompts._desplegar(largo)
+    assert len(opciones) == len(largo) and not aire
+    assert subtitulos == {3: "algo"}
+
+
+@pytest.mark.parametrize("ancho", [40, 60, 80, 200])
+def test_el_filete_nunca_desborda(a_ancho, ancho):
+    from cli import prompts
+    a_ancho(ancho, modulo=prompts)
+    assert len(prompts._regla()) <= max(ancho, 32) - 2
+
+
+def test_el_filete_tiene_tope(a_ancho):
+    # Una raya de doscientas columnas sobre una lista de cuatro palabras ya no cierra
+    # la pregunta: subraya la pantalla entera.
+    from cli import prompts
+    a_ancho(200, modulo=prompts)
+    assert len(prompts._regla()) == prompts._REGLA_MAX
+
+
+def test_la_pista_se_cae_antes_que_empujar_al_titulo(a_ancho):
+    from cli import prompts
+    c = a_ancho(34, modulo=prompts)
+    prompts._cabecera("Choose translation provider", "space toggle · ⌫ back")
+    assert "space toggle" not in c.file.getvalue()
 
 
 # ── la nota de cobertura de la multiselección ─────────────────────────────────
@@ -194,6 +262,88 @@ def test_lo_ya_contestado_vuelve_puesto(monkeypatch, a_ancho):
     wizard.run_wizard("apuntes.md", previo={"provider": "azure", "output": "Google Drive",
                                             "languages": ["FR"], "source": "apuntes.md"})
     assert defaults[0] == "azure" and defaults[1] == "Google Drive"
+
+
+# ── la carpeta de Drive ───────────────────────────────────────────────────────
+
+@pytest.fixture
+def drive_falso(monkeypatch):
+    """La carpeta guardada es M18, y nadie habla con Drive. Devuelve lo que se crea."""
+    monkeypatch.setattr(wizard, "configured_folder", lambda: ("id18", "M18"))
+    monkeypatch.setattr(wizard, "pick_drive_folder", lambda: ("id-otra", "Otra carpeta"))
+    creadas = []
+
+    def _crear(nombre, hermana_de):
+        creadas.append((nombre, hermana_de))
+        return f"id-{nombre}", nombre
+
+    monkeypatch.setattr(wizard, "create_folder_next_to", _crear)
+    return creadas
+
+
+def test_sin_drive_no_se_pregunta_la_carpeta(wizard_falso, drive_falso):
+    # Es una pregunta sobre el destino: sin destino en Drive no tiene sentido.
+    config, preguntas = wizard_falso(["auto", "Local only", ["EN"]])
+    assert not any(p.startswith("Drive folder") for p in preguntas)
+    assert config["drive_folder_id"] == ""
+
+
+def test_con_drive_se_pregunta_la_carpeta(wizard_falso, drive_falso):
+    config, preguntas = wizard_falso(["auto", "Google Drive", wizard._MISMA, ["EN"]])
+    assert preguntas[1].startswith("Output") and preguntas[2].startswith("Drive folder")
+    assert (config["drive_folder_id"], config["drive_folder_name"]) == ("id18", "M18")
+
+
+def test_la_de_siempre_es_lo_primero_y_viene_puesta(monkeypatch, a_ancho, drive_falso):
+    # Lo normal es seguir en la misma carpeta: confirmar tiene que ser un Enter.
+    a_ancho(80)
+    monkeypatch.setattr(wizard, "clear_screen", lambda: None)
+    estado = {"output": "Google Drive"}
+    visto = {}
+    monkeypatch.setattr(wizard, "ask_select",
+                        lambda label, choices, default=None, **k:
+                        visto.update(default=default, titulo=choices[0].title) or default)
+
+    wizard._paso_drive(estado, volver=True)
+
+    assert visto["default"] == wizard._MISMA
+    assert visto["titulo"].startswith("M18")
+    assert estado["drive_folder"] == "M18"
+
+
+def test_crear_una_carpeta_la_pone_al_lado_de_la_anterior(monkeypatch, wizard_falso, drive_falso):
+    # M19 va donde esta M18, no dentro: dentro de M18 estan las carpetas de idioma.
+    monkeypatch.setattr(wizard, "ask_text", lambda label, **k: "M19")
+    config, _ = wizard_falso(["auto", "Google Drive", wizard._NUEVA, ["EN"]])
+    assert drive_falso == [("M19", "id18")]
+    assert (config["drive_folder_id"], config["drive_folder_name"]) == ("id-M19", "M19")
+
+
+def test_el_nombre_nuevo_viene_propuesto(monkeypatch, wizard_falso, drive_falso):
+    propuestos = []
+
+    def _texto(label, default="", **k):
+        propuestos.append(default)
+        return "M19"
+
+    monkeypatch.setattr(wizard, "ask_text", _texto)
+    wizard_falso(["auto", "Google Drive", wizard._NUEVA, ["EN"]])
+    assert propuestos == ["M19"]
+
+
+def test_cancelar_el_selector_no_cancela_el_wizard(monkeypatch, wizard_falso, drive_falso):
+    # Volver del selector con las manos vacias devuelve a la pregunta, no a la terminal.
+    monkeypatch.setattr(wizard, "pick_drive_folder", lambda: None)
+    config, preguntas = wizard_falso(
+        ["auto", "Google Drive", wizard._ELEGIR, wizard._MISMA, ["EN"]])
+    assert config is not None and config["drive_folder_id"] == "id18"
+    assert sum(1 for p in preguntas if p.startswith("Drive folder")) == 2
+
+
+def test_la_carpeta_sale_en_las_migas(a_ancho):
+    a_ancho(80)
+    migas = wizard._migas(_estado(output="Google Drive", drive_folder="M19"))
+    assert "Google Drive · M19" in migas.plain
 
 
 # ── selector de carpetas ──────────────────────────────────────────────────────

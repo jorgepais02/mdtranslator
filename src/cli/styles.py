@@ -1,4 +1,13 @@
+import os
 import sys
+
+# prompt_toolkit cuantiza a 256 colores salvo que se le diga lo contrario, y rich pinta
+# 24 bits: la misma constante salia con dos valores distintos en la misma pantalla
+# (#5f6673 → #6c6c6c, #b3bac4 → #bcbcbc, #56a8ee → #5fafff). Medido capturando la
+# terminal con un pty. Va aqui y no en main.py porque los modulos de UI tambien se
+# ejecutan sueltos (python -m src.cli.folder_picker) y la lee al arrancar cada prompt.
+os.environ.setdefault("PROMPT_TOOLKIT_COLOR_DEPTH", "DEPTH_24_BIT")
+
 import questionary
 from rich.console import Console
 
@@ -15,13 +24,14 @@ def summary_grid(filas) -> "Table":
     """Bloque etiqueta/dato: gris a la izquierda, contenido a la derecha.
 
     Lo usan el wizard y la confirmacion, que ensenan lo mismo y tienen que verse
-    igual. Etiqueta a ancho fijo para que los datos queden en columna; el dato se
-    recorta con puntos suspensivos antes que envolverse, porque una respuesta partida
-    en dos lineas deja de leerse de un vistazo.
+    igual. La columna de etiquetas se ajusta a la mas larga en vez de ir a un ancho
+    fijo de 10: con "File" y "apuntes.md" el dato quedaba a seis espacios del nombre y
+    dejaban de leerse como una pareja. El dato se recorta con puntos suspensivos antes
+    que envolverse, porque una respuesta partida en dos lineas no se lee de un vistazo.
     """
     from rich.table import Table
     tabla = Table.grid(padding=(0, 2))
-    tabla.add_column(style=DIM, width=10, no_wrap=True)
+    tabla.add_column(style=META, no_wrap=True)
     tabla.add_column(overflow="ellipsis", no_wrap=True)
     for etiqueta, valor in filas:
         tabla.add_row(etiqueta, valor)
@@ -49,6 +59,67 @@ DIM     = "#5f6673"
 MUTED   = "#868e9c"
 FG      = "#b3bac4"
 BRIGHT  = "#ffffff"
+
+# ── La paleta del picker ─────────────────────────────────────────────────────
+# El wizard, la confirmacion y el selector de carpetas son la misma pantalla: una
+# cabecera, una pregunta y una lista. Ahi cada color tiene un unico rol y ninguno se
+# repite entre dos niveles, que era el problema de verdad — no que hubiera pocos
+# colores, sino que el mismo gris hacia de etiqueta, de opcion descartada y de dato.
+#
+#   BRAND    solo "mdtranslator"
+#   TITLE    solo el titulo de la pregunta viva
+#   SELECT   solo el item bajo el cursor (y el ❯ que lo senala)
+#   CONTEXT  las migas y los datos ya contestados
+#   OPTION   todo lo no elegido
+#   META     version, subtitulos, pistas de teclado, "back"
+#   RULE     el filete que cierra el titulo, y nada mas
+#
+# La rampa de grises va de menos a mas: META < CONTEXT < OPTION < TITLE. Los cuatro
+# pesos se distinguen; antes eran tres tonos casi iguales entre #d4d7dc y #e8e9ec.
+BRAND   = "#7dcfff"
+TITLE   = "#e6e6e6"
+SELECT  = "#7aa2f7"
+CONTEXT = "#565f89"
+OPTION  = "#6b7280"
+META    = "#4b5263"
+RULE    = "#33364a"
+
+# questionary abre cada opcion con " ❯ ", asi que el puntero cae en la columna 1. Lo
+# que pinta rich por su cuenta —la marca, las migas, el titulo, el filete— lleva este
+# margen para caer en esa misma columna y no un caracter a la izquierda.
+MARGEN  = " "
+
+VERSION = "2.1.0"
+
+
+def aire_superior() -> int:
+    """Lineas en blanco por encima de la marca. API: entero, entre 1 y 4.
+
+    Con una fija, la cabecera quedaba clavada al borde de arriba —y a pantalla
+    completa se nota el doble, porque debajo del bloque queda media ventana vacia y lo
+    que se lee es que la pantalla se ha quedado corta—. Depende solo del alto de la
+    ventana y no de lo que haya en ella: si dependiera del contenido, el bloque saltaria
+    de sitio entre una pregunta y la siguiente.
+
+    En una ventana corta se queda en una linea: la pantalla mas alta —los dieciocho
+    idiomas— ya va justa de sitio, y gastar renglones arriba es empujarla fuera.
+    """
+    return max(1, min(4, (console.height - 20) // 8))
+
+
+def marca() -> "Text":
+    """La linea de marca, identica en todas las pantallas de pregunta.
+
+    Va aqui y no en cada vista porque es lo unico que no cambia nunca: si el wizard y
+    la confirmacion la escriben cada uno por su cuenta, acaban con dos azules.
+    """
+    from rich.text import Text
+    # El estilo base de un Text lo heredan los tramos que se le anaden: puesto en el
+    # constructor, la version salia tambien en negrita.
+    t = Text(MARGEN)
+    t.append("mdtranslator", style=f"bold {BRAND}")
+    t.append(f" v{VERSION}", style=META)
+    return t
 
 
 def mezcla(a: str, b: str, t: float) -> str:
@@ -82,9 +153,9 @@ BAR_RAIL = mezcla(TERM_BG, BAR_TINT, 0.25)   # lo que queda, y la fila ya termin
 # y el primer ✓ de verdad ya no destacaba de nada. Reparto actual, que es el de
 # git status / npm install / docker build:
 #
-#   DIM     lo que nombra o esta en cola: etiquetas, unidades, opciones descartadas
-#   MUTED   lo ya contestado: el resumen que se colapso a una linea
-#   FG      contenido normal, y las opciones que no tienes debajo del cursor
+#   DIM     lo que nombra o esta en cola: etiquetas, unidades
+#   MUTED   dato secundario
+#   FG      contenido normal
 #   BRIGHT  contenido que responde a la pregunta de la pantalla
 #   CYAN    identidad de idioma, y nada mas
 #   BLUE    donde esta el cursor, y a donde lleva un enlace
@@ -94,6 +165,13 @@ BAR_RAIL = mezcla(TERM_BG, BAR_TINT, 0.25)   # lo que queda, y la fila ya termin
 #   BAR_*   la barra de progreso, en gris: no dice nada, solo dice "sigo vivo"
 #
 # Si anades un color, dile aqui que significa antes de usarlo en una vista.
+#
+# Este reparto es el de las vistas de ejecucion (pipeline y resultados), donde lo que
+# hay que leer es el estado de cada tarea. Las pantallas de pregunta usan la paleta
+# del picker de mas arriba: alli no hay estados, hay niveles. El cian no cruza — en el
+# picker la identidad de idioma es un dato mas y va en CONTEXT, porque BRAND ya ocupa
+# esa zona del espectro y dos cianes en la misma pantalla dejan de significar cosas
+# distintas.
 
 STATUS_QUEUED = "queued"
 
@@ -109,20 +187,26 @@ def status_style(status: str) -> str:
 
 # ── questionary style ─────────────────────────────────────────────────────────
 # El puntero va en azul, no en verde: marca donde esta el cursor, no un acierto.
+#
+# `separator` es la unica clase que questionary tiene para todo lo que no es una
+# opcion, asi que aqui vale para los subtitulos y para las lineas en blanco que
+# separan bloques. El filete NO es un separator: lo pinta rich antes de arrancar el
+# prompt, porque va en otro color y compartiendo clase saldrian los dos iguales.
 WIZARD_STYLE = questionary.Style([
-    ("qmark",       ""),                     # sin simbolo delante de la pregunta
-    ("question",    f"fg:{BRIGHT} bold"),
-    ("answer",      f"fg:{BRIGHT} bold"),
-    ("pointer",     f"fg:{BLUE} bold"),      # ❯ — donde estas
-    ("highlighted", f"fg:{BRIGHT} bold"),    # la opcion bajo el cursor
+    ("qmark",       ""),                      # sin simbolo delante de la pregunta
+    ("question",    f"fg:{TITLE} bold"),
+    ("answer",      f"fg:{SELECT} bold"),
+    ("pointer",     f"fg:{SELECT} bold"),     # ❯ — donde estas
+    ("highlighted", f"fg:{SELECT} bold"),     # la opcion bajo el cursor
     # noreverse a proposito: prompt_toolkit pinta "selected" en video inverso y la
-    # multiseleccion salia con bloques cian de fondo. El circulo ya dice que esta
-    # marcada; el cian solo tiene que decir "esto es un idioma".
-    ("selected",    f"fg:{CYAN} noreverse"),  # marcada en un checkbox
-    ("instruction", f"fg:{DIM}"),
-    ("separator",   f"fg:{DIM}"),
-    ("text",        f"fg:{FG}"),
-    ("disabled",    f"fg:{DIM} italic"),
+    # multiseleccion salia con bloques de fondo. Mismo color que el cursor porque es
+    # el mismo rol —lo elegido—; lo que separa "marcado" de "donde estoy" es la
+    # negrita del cursor y el ❯, no un segundo color.
+    ("selected",    f"fg:{SELECT} noreverse"),  # marcada en un checkbox
+    ("instruction", f"fg:{META}"),
+    ("separator",   f"fg:{META} italic"),     # subtitulo de una opcion
+    ("text",        f"fg:{OPTION}"),          # lo no elegido
+    ("disabled",    f"fg:{META} italic"),
 ])
 
 # ── Language glossary ─────────────────────────────────────────────────────────

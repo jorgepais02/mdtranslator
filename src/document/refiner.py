@@ -9,9 +9,14 @@ Estrategia:
 
 Nodos refinables:  paragraph, list_item, blockquote
 Nodos intocables:  heading, code_block, table, hr, blank, frontmatter
+
+API:
+    refine_markdown(lines, lang_code, cache=None, cancelado=None) -> (lineas, aviso)
+CLI:
+    python -m src.document.refiner input.md lang_code
 """
 
-import os, re
+import os, re, time
 from dataclasses import dataclass
 from typing import Literal
 from google import genai
@@ -122,9 +127,70 @@ SYSTEM = (
 
 BATCH = 25
 
-def _call_gemini(texts: list[str], lang: str, client) -> tuple[list[str], str | None]:
+# La caché de refinamiento comparte tabla con la de traducción: su clave es
+# (texto, idioma, proveedor), así que el proveedor hace de namespace. Lo que Gemini
+# ya refinó no se vuelve a pagar, y por eso relanzar un lote que murió a la mitad
+# solo repite lo que falta.
+CACHE_PROVIDER = "gemini-refine"
+
+# Cuando salta el 429, el propio error dice cuánto falta para que se libere hueco
+# (`retryDelay`), y ese número baja en cada intento: medido, 59s → 34s → 9s. Esperar
+# lo que pide y reintentar recupera la petición; rendirse al primer 429 deja el
+# documento sin refinar teniendo la cuota a un minuto de distancia.
+_RETRY_DELAY_RE = re.compile(r"'retryDelay':\s*'(\d+)s'")
+_MAX_INTENTOS   = 2
+_MAX_ESPERA     = 60          # s: por encima de esto, mejor avisar que colgar el lote
+_PASO_ESPERA    = 1           # s: se duerme a trocitos para poder atender un Ctrl+C
+
+
+def _espera_pedida(error: Exception) -> int | None:
+    """Los segundos que pide un 429, o None si el error es de otra cosa."""
+    texto = str(error)
+    if "429" not in texto and "RESOURCE_EXHAUSTED" not in texto:
+        return None
+    m = _RETRY_DELAY_RE.search(texto)
+    return min(int(m.group(1)) + 1, _MAX_ESPERA) if m else _MAX_ESPERA
+
+
+def es_aviso_de_cuota(aviso: str | None) -> bool:
+    """True si el aviso viene de la cuota de Gemini y no de otro fallo. API: bool.
+
+    Lo usa el pipeline para dejar de intentarlo en el resto de la ejecución: un 503 o
+    una respuesta con líneas de más son cosa de ese documento, pero la cuota es de
+    todos, y probar uno por uno cuesta un minuto de espera por documento.
+    """
+    if not aviso:
+        return False
+    t = str(aviso).lower()
+    return "429" in t or "resource_exhausted" in t
+
+
+def _dormir(segundos: int, cancelado) -> bool:
+    """Duerme a trocitos. False si hay que abandonar porque el usuario canceló."""
+    for _ in range(segundos):
+        if cancelado is not None and cancelado():
+            return False
+        time.sleep(_PASO_ESPERA)
+    return True
+
+def _call_gemini(texts: list[str], lang: str, client, cancelado=None) -> tuple[list[str], str | None]:
     if not texts:
         return [], None
+    ultimo: Exception | None = None
+    for intento in range(_MAX_INTENTOS):
+        try:
+            return _una_llamada(texts, lang, client)
+        except Exception as e:
+            espera = _espera_pedida(e)
+            if espera is None or intento == _MAX_INTENTOS - 1:
+                raise
+            ultimo = e
+            if not _dormir(espera, cancelado):
+                raise
+    raise ultimo          # inalcanzable, pero deja claro que aquí no se devuelve None
+
+
+def _una_llamada(texts: list[str], lang: str, client) -> tuple[list[str], str | None]:
     numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
     resp = client.models.generate_content(
         model="gemini-2.5-flash",
@@ -147,8 +213,41 @@ def _call_gemini(texts: list[str], lang: str, client) -> tuple[list[str], str | 
 
 REFINABLE = {"paragraph", "list_item", "blockquote"}
 
-def refine_markdown(lines: list[str], lang_code: str) -> tuple[list[str], str | None]:
-    """Refina un MD traducido. Devuelve (líneas, warning_o_None) sin imprimir nada."""
+
+def _refinar(textos: list[str], lang_code: str, client, cache, cancelado):
+    """Los textos refinados en el mismo orden, o (None, aviso).
+
+    Lo que ya está en caché no viaja, y las líneas repetidas dentro del documento
+    cuentan una sola vez: en unos apuntes, "Fuente: INCIBE" sale veinte veces.
+    """
+    hechos: dict[str, str] = {}
+    if cache is not None:
+        for t in dict.fromkeys(textos):
+            guardado = cache.get(t, lang_code, CACHE_PROVIDER)
+            if guardado is not None:
+                hechos[t] = guardado
+
+    faltan = [t for t in dict.fromkeys(textos) if t not in hechos]
+    for start in range(0, len(faltan), BATCH):
+        lote = faltan[start:start + BATCH]
+        salida, aviso = _call_gemini(lote, lang_code, client, cancelado)
+        if aviso:
+            return None, aviso
+        if cache is not None:
+            cache.set_many(list(zip(lote, salida)), lang_code, CACHE_PROVIDER)
+        hechos.update(zip(lote, salida))
+
+    return [hechos[t] for t in textos], None
+
+
+def refine_markdown(lines: list[str], lang_code: str, cache=None,
+                    cancelado=None) -> tuple[list[str], str | None]:
+    """Refina un MD traducido. Devuelve (líneas, warning_o_None) sin imprimir nada.
+
+    cache     — cualquier objeto con get(texto, lang, proveedor) y set_many(pares, …);
+                sin él el refinamiento funciona igual, pero se paga cada vez
+    cancelado — callable que dice si hay que abandonar mientras se espera un 429
+    """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return lines, "GEMINI_API_KEY not set"
@@ -166,13 +265,10 @@ def refine_markdown(lines: list[str], lang_code: str) -> tuple[list[str], str | 
             texts.append(clean)
             imaps.append(tok)
 
-    refined = []
     try:
-        for start in range(0, len(texts), BATCH):
-            batch_out, warn = _call_gemini(texts[start:start + BATCH], lang_code, client)
-            refined += batch_out
-            if warn:
-                return lines, warn
+        refined, warn = _refinar(texts, lang_code, client, cache, cancelado)
+        if warn:
+            return lines, warn
     except Exception as e:
         # Con el mensaje pelado, un 503 de Gemini llegaba a la tabla final como
         # "Google Drive server error": el aviso tiene que decir de donde viene.

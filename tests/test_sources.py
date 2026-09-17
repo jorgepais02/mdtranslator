@@ -2,7 +2,8 @@
 
 import pytest
 
-from core.sources import ALL_FILES, collect_sources, needs_formatting
+from core.sources import (ALL_FILES, collect_sources, list_source_folders,
+                          needs_formatting)
 
 
 @pytest.fixture
@@ -68,3 +69,47 @@ def test_almohadilla_sin_espacio_no_es_heading(tmp_path):
     falso = tmp_path / "falso.md"
     falso.write_text("#hashtag y ya\n", encoding="utf-8")
     assert needs_formatting(falso)
+
+
+# ── lotes: una subcarpeta de sources/ es un modulo entero ─────────────────────
+
+@pytest.fixture
+def con_lote(carpeta):
+    lote = carpeta / "modulo-19"
+    lote.mkdir()
+    for n in ("clase1.txt", "clase2.txt", "clase3.txt"):
+        (lote / n).write_text("transcripcion\n", encoding="utf-8")
+    (carpeta / "vacia").mkdir()
+    return carpeta
+
+
+def test_una_subcarpeta_se_elige_por_su_nombre(con_lote):
+    nombres = [p.name for p in collect_sources("modulo-19", con_lote)]
+    assert nombres == ["clase1.txt", "clase2.txt", "clase3.txt"]
+
+
+def test_all_files_no_baja_a_las_subcarpetas(con_lote):
+    # "Process ALL files" son los sueltos: si bajara, cada modulo nuevo reprocesaria
+    # todos los anteriores.
+    nombres = [p.name for p in collect_sources(ALL_FILES, con_lote)]
+    assert nombres == ["apuntes.md", "notas.txt", "tema2.md"]
+
+
+def test_dentro_del_lote_el_md_gana_sobre_su_txt(con_lote):
+    # Segunda pasada: Gemini dejo el .md hermano al lado del .txt del que salio.
+    (con_lote / "modulo-19" / "clase2.md").write_text("# Clase 2\n", encoding="utf-8")
+    nombres = [p.name for p in collect_sources("modulo-19", con_lote)]
+    assert nombres == ["clase1.txt", "clase2.md", "clase3.txt"]
+
+
+def test_list_source_folders_da_la_cuenta(con_lote):
+    assert [(d.name, n) for d, n in list_source_folders(con_lote)] == [("modulo-19", 3)]
+
+
+def test_list_source_folders_omite_las_vacias(con_lote):
+    # "vacia/" existe pero no tiene fuentes: como opcion solo llevaria a un aviso.
+    assert "vacia" not in [d.name for d, _ in list_source_folders(con_lote)]
+
+
+def test_list_source_folders_sin_sources_no_revienta(tmp_path):
+    assert list_source_folders(tmp_path / "nope") == []

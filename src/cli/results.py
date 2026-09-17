@@ -4,7 +4,7 @@ from rich.console import Group
 from rich.columns import Columns
 from rich.rule import Rule
 from rich import box
-from .styles import console, GREEN, BLUE, CYAN, DIM, BRIGHT, FG, RED, YELLOW
+from .styles import console, GREEN, BLUE, CYAN, DIM, BRIGHT, FG, RED, VERSION, YELLOW
 
 def _short_warning(msg: str) -> str:
     msg = str(msg)
@@ -70,7 +70,9 @@ def _short_warning(msg: str) -> str:
     return cut + "…"
 
 
-def show_results(results: list[dict], total_time: float, version: str = "2.1.0"):
+def show_results(results: list[dict], total_time: float, version: str = VERSION,
+                 retry_cmd: str | None = None,
+                 retry_note: str | None = None):
     parts = []
     # Several source files land in one table, so name the source to keep rows apart.
     multi = len({r.get("source") for r in results if r.get("source")}) > 1
@@ -157,6 +159,37 @@ def show_results(results: list[dict], total_time: float, version: str = "2.1.0")
             fila.append(_short_warning(msg))
             warn_grid.add_row(*fila)
         parts.append(warn_grid)
+        parts.append(Text())
+
+    # ── Lo que quedó a medias ─────────────────────────────────────────
+    # Un documento sin refinar está subido y se usa, así que no es un fallo; pero si
+    # nadie dice que se puede recuperar, se queda así para siempre. El comando va
+    # escrito entero porque la pregunta de verdad no es "¿qué falta?" sino "¿y ahora
+    # qué hago?", y relanzar sale barato: lo ya hecho está en la caché.
+    a_medias = [r for r in results if r.get("incomplete")]
+    fallidos = [r for r in results if not r["ok"]]
+    if a_medias or fallidos:
+        parts.append(Text("Unfinished", style=f"bold {YELLOW}"))
+        # La sangría la pone una columna vacía, como en Warnings: un comando largo se
+        # parte, y sin ella la segunda línea arrancaba en la columna 0 y se leía como
+        # otro comando distinto.
+        detalle = Table.grid(padding=(0, 0))
+        detalle.add_column(width=3, no_wrap=True)
+        detalle.add_column(overflow="fold")
+        if fallidos:
+            detalle.add_row("", Text(f"{len(fallidos)} of {len(results)} documents did "
+                                     f"not come out.", style=DIM))
+        if a_medias:
+            detalle.add_row("", Text(f"{len(a_medias)} of {len(results)} documents are "
+                                     f"missing the refining pass.", style=DIM))
+        if retry_note:
+            detalle.add_row("", Text(retry_note, style=DIM))
+        detalle.add_row("", Text("Run the same command again — only what is missing is "
+                                 "redone, the rest comes from the cache.", style=DIM))
+        if retry_cmd:
+            detalle.add_row("", "")
+            detalle.add_row("", Text(retry_cmd, style=BRIGHT))
+        parts.append(detalle)
         parts.append(Text())
 
     # ── Footer ────────────────────────────────────────────────────────

@@ -3,6 +3,7 @@ Descubrimiento y normalización de ficheros fuente.
 
 API:
     collect_sources(selection, sources_dir=SOURCES_DIR) -> list[Path]
+    list_source_folders(sources_dir=SOURCES_DIR) -> list[tuple[Path, int]]
     needs_formatting(path) -> bool
     load_markdown(path, allow_format=True) -> tuple[str, str | None]
 """
@@ -29,28 +30,59 @@ def _dedupe(paths: list[Path]) -> list[Path]:
     return sorted(by_stem.values(), key=lambda q: q.name.lower())
 
 
-def collect_sources(selection: str, sources_dir: Path = SOURCES_DIR) -> list[Path]:
-    """
-    selection — ALL_FILES, un nombre suelto, una ruta 'sources/...' o una ruta absoluta.
+def _en_carpeta(carpeta: Path) -> list[Path]:
+    """Las fuentes de una carpeta, sin bajar a sus subcarpetas.
 
-    En modo ALL_FILES los stems duplicados colapsan en una sola entrada, de modo que
-    apuntes.md y apuntes.txt no compiten por el mismo fichero de salida.
+    No es recursivo a propósito: una subcarpeta de sources/ es un lote —un módulo, un
+    curso— y lo que contiene son sus documentos. Bajando el árbol, "todos los de este
+    módulo" arrastraría los del anterior en cuanto se anidaran dos.
     """
-    if selection == ALL_FILES:
-        if not sources_dir.exists():
-            return []
-        found = [p for p in sources_dir.iterdir()
-                 if p.is_file() and p.suffix.lower() in VALID_EXTS]
-        return _dedupe(found)
+    if not carpeta.exists():
+        return []
+    return _dedupe([p for p in carpeta.iterdir()
+                    if p.is_file() and p.suffix.lower() in VALID_EXTS])
 
+
+def _ruta(selection: str, sources_dir: Path) -> Path:
     p = Path(selection)
     if p.is_absolute():
-        path = p
-    elif selection.startswith("sources/"):
-        path = PROJECT_ROOT / selection
-    else:
-        path = sources_dir / selection
-    return [path] if path.exists() else []
+        return p
+    if selection.startswith("sources/"):
+        return PROJECT_ROOT / selection
+    return sources_dir / selection
+
+
+def collect_sources(selection: str, sources_dir: Path = SOURCES_DIR) -> list[Path]:
+    """
+    selection — ALL_FILES, un nombre suelto, una subcarpeta de sources/, una ruta
+    'sources/...' o una ruta absoluta.
+
+    ALL_FILES son los ficheros sueltos de sources/, no todo el arbol: las subcarpetas
+    son lotes y se eligen por su nombre. Dentro de un lote los stems duplicados
+    colapsan en una sola entrada, de modo que apuntes.md y apuntes.txt no compiten por
+    el mismo fichero de salida.
+    """
+    if selection == ALL_FILES:
+        return _en_carpeta(sources_dir)
+
+    path = _ruta(selection, sources_dir)
+    if path.is_dir():
+        return _en_carpeta(path)
+    return [path] if path.is_file() else []
+
+
+def list_source_folders(sources_dir: Path = SOURCES_DIR) -> list[tuple[Path, int]]:
+    """Subcarpetas de sources/ que traen fuentes, y cuántas. API: [(Path, n)].
+
+    Las vacías no salen: una carpeta sin .md ni .txt es una opción que no lleva a
+    ningún sitio, y el wizard tendría que avisar de que no hay nada dentro.
+    """
+    if not sources_dir.exists():
+        return []
+    lotes = [(d, len(_en_carpeta(d)))
+             for d in sorted(sources_dir.iterdir(), key=lambda p: p.name.lower())
+             if d.is_dir()]
+    return [(d, n) for d, n in lotes if n]
 
 
 def needs_formatting(path: Path) -> bool:
