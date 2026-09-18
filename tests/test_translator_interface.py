@@ -215,3 +215,67 @@ def test_un_proveedor_con_args_variables_lo_recibe_por_posicion():
             return [f"[{args[0] if args else None}] {t}" for t in texts]
 
     assert call_translate(ConArgs(), ["hola"], "EN", "es") == ["[es] hola"]
+
+
+# ── context ───────────────────────────────────────────────────────────────────
+# De qué van los apuntes, para que el proveedor elija la acepción del módulo. Cada línea
+# viaja sola y "forense" en español es a la vez el médico del juzgado y la disciplina
+# informática: sin contexto, "Análisis Forense" salía en chino como "法医分析" —el de las
+# autopsias— y "Selección del Origen" como "产地选择", la procedencia de un producto.
+
+
+class ConContexto(BaseTranslator):
+    name = "con-contexto"
+
+    def __init__(self):
+        self.visto = "sin pasar"
+
+    def translate(self, texts, target_lang, source_lang=None, context=None):
+        self.visto = context
+        return [f"[{context}] {t}" for t in texts]
+
+
+def test_un_proveedor_que_lo_declara_recibe_el_contexto():
+    p = ConContexto()
+    assert call_translate(p, ["hola"], "EN", "es", "apuntes de forense digital") == \
+        ["[apuntes de forense digital] hola"]
+    assert p.visto == "apuntes de forense digital"
+
+
+def test_un_proveedor_que_no_lo_declara_no_se_entera():
+    # Es el caso de Azure: su API no tiene nada equivalente, y pasárselo reventaría.
+    assert call_translate(Nuevo(), ["hola"], "EN", "es", "apuntes de forense") == \
+        ["[EN<es>] hola"]
+    assert call_translate(Antiguo(), ["hola"], "EN", None, "apuntes de forense") == \
+        ["[EN] hola"]
+
+
+def test_con_args_variables_el_contexto_no_se_cuela_por_posicion():
+    """Su sitio depende de que source_lang venga puesto: por posición llegaría descolocado."""
+    class ConArgs(BaseTranslator):
+        name = "args"
+        def translate(self, texts, target_lang, *args):
+            return [f"[{len(args)}] {t}" for t in texts]
+
+    assert call_translate(ConArgs(), ["hola"], "EN", "es", "contexto") == ["[1] hola"]
+    assert call_translate(ConArgs(), ["hola"], "EN", None, "contexto") == ["[0] hola"]
+
+
+def test_el_contexto_atraviesa_las_tres_capas(cache):
+    p = ConContexto()
+    envuelto = ProtectedTranslator(FallbackTranslator([CachingTranslator(p, cache)]))
+    envuelto.translate(["hola"], "EN", "es", context="apuntes de vehículos")
+    assert p.visto == "apuntes de vehículos"
+
+
+def test_el_contexto_no_entra_en_la_clave_de_la_cache(cache):
+    """Meterlo invalidaría las 16.000 traducciones que ya hay para reescribir lo mismo."""
+    p = Contador()
+    envuelto = CachingTranslator(p, cache)
+
+    envuelto.translate(["hola"], "EN", context="apuntes de vehículos")
+    assert p.llamadas == 1
+    # Otro módulo, otro contexto: sigue siendo un acierto de caché y no se paga.
+    assert envuelto.translate(["hola"], "EN", context="apuntes de jaulas de Faraday") == \
+        ["HOLA"]
+    assert p.llamadas == 1

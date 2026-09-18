@@ -1,6 +1,7 @@
 """parse_markdown_lines / rebuild: la correspondencia 1:1 entre líneas y traducciones."""
 
-from core.parser import parse_markdown_lines, rebuild_markdown_from_translations
+from core.parser import (contexto_del_documento, parse_markdown_lines,
+                         rebuild_markdown_from_translations)
 
 DOC = """# Título del tema
 
@@ -97,3 +98,54 @@ def test_el_numero_de_la_lista_ordenada_no_se_traduce():
 
 def test_documento_vacio():
     assert rebuild_markdown_from_translations(parse_markdown_lines([]), []) == []
+
+
+# ── contexto_del_documento ────────────────────────────────────────────────────
+# De qué van los apuntes, sacado del propio documento y no de un glosario a mano: cada
+# módulo habla de otra cosa y no se sabe de antemano qué palabras se vuelven ambiguas.
+
+
+def test_el_contexto_es_el_titulo_y_su_entradilla():
+    md = ("# Clonado de Dispositivos a Nivel Forense\n\n"
+          "Este módulo aborda el clonado de dispositivos, la cadena de custodia y el uso "
+          "de funciones hash.\n\n"
+          "## Introducción\n")
+    c = contexto_del_documento(md)
+    assert c.startswith("Clonado de Dispositivos a Nivel Forense ")
+    assert "cadena de custodia" in c
+
+
+def test_sin_entradilla_el_contexto_baja_al_desarrollo():
+    """Sin esto, "Técnicas de Extracción Invasivas" era todo el contexto, y el chino
+    tradujo "extracción" como la dental: 侵入性拔牙技术."""
+    md = ("# Técnicas de Extracción Invasivas\n\n"
+          "## JTAG\n\n"
+          "La técnica JTAG implica soldar cables a la placa para leer la memoria flash "
+          "del teléfono móvil.\n")
+    c = contexto_del_documento(md)
+    assert "memoria flash" in c
+    assert "JTAG\n" not in c          # el encabezado suelto no, la prosa sí
+
+
+def test_el_contexto_deja_fuera_lo_que_no_es_prosa():
+    md = ("# Formatos de Imagen\n\n"
+          "- RAW: sin compresión\n"
+          "| a | b |\n"
+          "> una cita\n"
+          "```\ndd if=/dev/sda\n```\n"
+          "Los formatos más usados comprimen la imagen.\n")
+    c = contexto_del_documento(md)
+    assert c == "Formatos de Imagen Los formatos más usados comprimen la imagen."
+
+
+def test_sin_encabezado_de_nivel_uno_no_hay_contexto():
+    assert contexto_del_documento("## Solo una sección\n\nTexto.\n") == ""
+    assert contexto_del_documento("Texto suelto sin título.\n") == ""
+
+
+def test_el_recorte_no_parte_la_ultima_palabra():
+    md = "# Título\n\n" + ("palabra " * 300)
+    c = contexto_del_documento(md, tope=50)
+    assert len(c) <= 50
+    assert not c.endswith("palabr")
+    assert c.split()[-1] == "palabra"

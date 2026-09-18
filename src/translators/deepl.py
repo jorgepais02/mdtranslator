@@ -58,7 +58,8 @@ class DeepLTranslator(BaseTranslator):
         raise TranslationError("DeepL API: max retries exceeded")
 
     def translate(self, texts: list[str], target_lang: str,
-                  source_lang: str | None = None) -> list[str]:
+                  source_lang: str | None = None,
+                  context: str | None = None) -> list[str]:
         if not texts:
             return []
 
@@ -74,6 +75,12 @@ class DeepLTranslator(BaseTranslator):
             payload = {"text": chunk, "target_lang": self.api_lang(target_lang)}
             if source_lang:
                 payload["source_lang"] = source_lang.split("-")[0].upper()
+            # context no se traduce y **no se cobra**: medido contra la API, el mismo
+            # texto de 32 caracteres factura 32 con y sin 423 de contexto. Es lo que
+            # arregla la acepcion equivocada — sin el, "Analisis Forense" salia en chino
+            # como "法医分析", el forense de las autopsias.
+            if context:
+                payload["context"] = context
             results.extend(self._post_with_retry(payload, headers))
 
         return results

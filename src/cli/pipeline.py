@@ -20,8 +20,8 @@ from translators import get_translator
 from translators.base import call_translate
 from translators.cache import TranslationCache
 from document.refiner import AVISO_SIN_CUOTA, es_aviso_de_cuota, refine_markdown
-from core.parser import (conserva_la_parte, parse_markdown_lines, quita_la_parte,
-                         rebuild_markdown_from_translations)
+from core.parser import (conserva_la_parte, contexto_del_documento, parse_markdown_lines,
+                         quita_la_parte, rebuild_markdown_from_translations)
 from core.docgen import generate_docx_document, convert_many_to_pdf
 from core.config import TRANSLATED_DIR, DRIVE_FOLDER_ID, CONFIG
 from core.sources import collect_sources, load_markdown, needs_formatting
@@ -473,6 +473,10 @@ class SourceDoc:
     texts:    list[str] = field(default_factory=list)
     src_lang: str | None = None
     warning:  str | None = None
+    # De qué van estos apuntes: el título y su entradilla, en el idioma origen. Viaja con
+    # cada petición para que el proveedor elija la acepción del módulo y no la del español
+    # general. No es contenido y no se traduce.
+    contexto: str = ""
 
     @property
     def stem(self) -> str:
@@ -517,7 +521,8 @@ def _prepare_one(path: Path, format_raw: bool, forced_lang: str | None,
     # contenido, es la posición del documento en una serie, y al traductor no le incumbe.
     content = quita_la_parte(content)
 
-    doc = SourceDoc(path=path, content=content, warning=warning)
+    doc = SourceDoc(path=path, content=content, warning=warning,
+                    contexto=contexto_del_documento(content))
     try:
         doc.parsed = parse_markdown_lines(content.splitlines())
         doc.texts  = [text for _, _pfx, text in doc.parsed if text]
@@ -702,7 +707,8 @@ def run_pipeline(config: dict) -> list[dict]:
                 if is_source:
                     new_content = doc.content if doc.content.endswith("\n") else doc.content + "\n"
                 else:
-                    translated = call_translate(translator, doc.texts, lang, doc.src_lang)
+                    translated = call_translate(translator, doc.texts, lang, doc.src_lang,
+                                                doc.contexto)
                     rebuilt    = rebuild_markdown_from_translations(doc.parsed, translated)
 
                     if needs_refine(lang):
@@ -719,7 +725,8 @@ def run_pipeline(config: dict) -> list[dict]:
                             else:
                                 rebuilt, refine_warn, cambio = refine_markdown(
                                     rebuilt, lang, cache=refine_cache,
-                                    cancelado=cancelled.is_set)
+                                    cancelado=cancelled.is_set,
+                                    contexto=doc.contexto)
                         if refine_warn:
                             warning = refine_warn
                             refined = False

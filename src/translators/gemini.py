@@ -59,7 +59,8 @@ class GeminiTranslator(BaseTranslator):
         self._model = model or modelo_de("gemini")
 
     def translate(self, texts: list[str], target_lang: str,
-                  source_lang: str | None = None) -> list[str]:
+                  source_lang: str | None = None,
+                  context: str | None = None) -> list[str]:
         if not texts:
             return []
         lang_name = self._LANG_NAMES.get(target_lang.upper().split("-")[0], target_lang)
@@ -71,6 +72,13 @@ class GeminiTranslator(BaseTranslator):
             chunk = texts[i: i + self.max_batch_size]
             numbered = "\n".join(f"{j+1}. {t}" for j, t in enumerate(chunk))
             prompt = self._PROMPT_TMPL.format(lang_name=lang_name, numbered=numbered)
+            # Aqui el contexto es una linea del prompt, no un parametro de la API: es
+            # lo mismo que hace DeepL con su `context`, y sirve para lo mismo —elegir
+            # la acepcion del modulo y no la del español general—.
+            if context:
+                prompt = (f"These lines come from academic notes about: {context}\n"
+                          f"Use that to disambiguate terms. Do not translate this line.\n"
+                          + prompt)
             if src_name:
                 prompt = f"The source text is written in {src_name}.\n" + prompt
             try:

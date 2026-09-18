@@ -135,6 +135,15 @@ SYSTEM = (
     "If a line is already natural, return it unchanged."
 )
 
+# De que van los apuntes, pegado al SYSTEM. Es la red de seguridad de los idiomas que
+# refinan: DeepL tiene su parametro `context` y Gemini lo mete en su prompt, pero **Azure
+# no tiene nada equivalente** (su `category` es un modelo entrenado aparte y su diccionario
+# dinamico, dice Microsoft, "solo es seguro para nombres propios"). Aqui se corrige venga
+# de donde venga la traduccion, y sin una peticion de mas.
+CONTEXTO = (" These notes are about: {contexto} "
+            "Use that to pick the right sense of ambiguous terms and to keep the same "
+            "term for the same concept throughout.")
+
 BATCH = 25
 
 # La caché de refinamiento comparte tabla con la de traducción: su clave es
@@ -188,7 +197,8 @@ def _dormir(segundos: int, cancelado) -> bool:
         time.sleep(_PASO_ESPERA)
     return True
 
-def _llamar_modelo(texts: list[str], lang: str, modelo, cancelado=None) -> tuple[list[str], str | None]:
+def _llamar_modelo(texts: list[str], lang: str, modelo, cancelado=None,
+                   contexto: str | None = None) -> tuple[list[str], str | None]:
     """Un lote refinado, reintentando si lo que falla es la cuota.
 
     El orden importa: con varios modelos configurados, la lista entera se prueba
@@ -201,7 +211,7 @@ def _llamar_modelo(texts: list[str], lang: str, modelo, cancelado=None) -> tuple
     ultimo: Exception | None = None
     for intento in range(_MAX_INTENTOS):
         try:
-            return _una_llamada(texts, lang, modelo)
+            return _una_llamada(texts, lang, modelo, contexto)
         except Exception as e:
             espera = espera_pedida(e)
             if espera is None or intento == _MAX_INTENTOS - 1:
@@ -212,11 +222,15 @@ def _llamar_modelo(texts: list[str], lang: str, modelo, cancelado=None) -> tuple
     raise ultimo          # inalcanzable, pero deja claro que aquí no se devuelve None
 
 
-def _una_llamada(texts: list[str], lang: str, modelo) -> tuple[list[str], str | None]:
+def _una_llamada(texts: list[str], lang: str, modelo,
+                 contexto: str | None = None) -> tuple[list[str], str | None]:
     numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
+    system = SYSTEM.format(lang=lang.upper())
+    if contexto:
+        system += CONTEXTO.format(contexto=contexto)
     raw = modelo.complete(
         f"Refine these {len(texts)} lines:\n\n{numbered}",
-        system=SYSTEM.format(lang=lang.upper()),
+        system=system,
         temperature=0.2,
     )
     out = []
@@ -235,7 +249,8 @@ def _una_llamada(texts: list[str], lang: str, modelo) -> tuple[list[str], str | 
 REFINABLE = {"paragraph", "list_item", "blockquote"}
 
 
-def _refinar(textos: list[str], lang_code: str, modelo, cache, cancelado):
+def _refinar(textos: list[str], lang_code: str, modelo, cache, cancelado,
+             contexto: str | None = None):
     """Los textos refinados en el mismo orden, o (None, aviso).
 
     Lo que ya está en caché no viaja, y las líneas repetidas dentro del documento
@@ -251,7 +266,7 @@ def _refinar(textos: list[str], lang_code: str, modelo, cache, cancelado):
     faltan = [t for t in dict.fromkeys(textos) if t not in hechos]
     for start in range(0, len(faltan), BATCH):
         lote = faltan[start:start + BATCH]
-        salida, aviso = _llamar_modelo(lote, lang_code, modelo, cancelado)
+        salida, aviso = _llamar_modelo(lote, lang_code, modelo, cancelado, contexto)
         if aviso:
             return None, aviso
         if cache is not None:
@@ -262,12 +277,15 @@ def _refinar(textos: list[str], lang_code: str, modelo, cache, cancelado):
 
 
 def refine_markdown(lines: list[str], lang_code: str, cache=None,
-                    cancelado=None) -> tuple[list[str], str | None, dict | None]:
+                    cancelado=None,
+                    contexto: str | None = None) -> tuple[list[str], str | None, dict | None]:
     """Refina un MD traducido. Devuelve (líneas, warning_o_None, cambio_de_modelo).
 
     cache     — cualquier objeto con get(texto, lang, proveedor) y set_many(pares, …);
                 sin él el refinamiento funciona igual, pero se paga cada vez
     cancelado — callable que dice si hay que abandonar mientras se espera un 429
+    contexto  — de qué van los apuntes, para desambiguar. No cambia la clave de la
+                caché: lo ya refinado se reutiliza tal cual y solo lo nuevo lo lleva
 
     El tercer valor solo trae algo cuando **no** contestó el modelo preferido: si el
     resultado sale del primero de la lista no hay nada que contar, y la pantalla final
@@ -288,7 +306,7 @@ def refine_markdown(lines: list[str], lang_code: str, cache=None,
             imaps.append(tok)
 
     try:
-        refined, warn = _refinar(texts, lang_code, modelo, cache, cancelado)
+        refined, warn = _refinar(texts, lang_code, modelo, cache, cancelado, contexto)
         if warn:
             return lines, warn, cambio_de_modelo(modelo)
     except Exception as e:

@@ -44,7 +44,7 @@ src/
   core/
     config.py             # PROJECT_ROOT, SOURCES_DIR, TRANSLATED_DIR, CONFIG, DRIVE_FOLDER_ID
     sources.py            # collect_sources / needs_formatting / load_markdown
-    parser.py             # parse_markdown_lines / rebuild_markdown_from_translations
+    parser.py             # parse_markdown_lines / rebuild + contexto_del_documento
     docgen.py             # generate_docx_document + convert_docx_to_pdf (LibreOffice)
   translators/
     base.py               # BaseTranslator ABC, Fallback, Protected, chunk_texts, call_translate
@@ -265,6 +265,46 @@ nadie haya tocado nada. `BaseTranslator.api_lang()` aplica la tabla y `supported
 declara qué cubre cada proveedor (`None` = no publica lista, se intenta igual).
 Comprobado contra las APIs: Azure declara 138 idiomas y DeepL 110 destinos, y los 18 de
 la interfaz están en las dos.
+
+### El contexto del documento viaja con la traducción
+Cada línea se traduce **sola**, y eso elige mal la acepción cuando la palabra tiene dos.
+Medido en el chino del módulo 19: `Selección del Origen` salió `产地选择` —la procedencia
+de un producto— y `Análisis Forense` salió `法医分析`, el forense de las autopsias. Lo
+mismo en árabe (`الطب الشرعي`, medicina legal) y en francés (`légiste`). No es un fallo del
+traductor: en español «forense» es las dos cosas y en la línea no hay nada que lo aclare.
+
+Un glosario prefijado no vale — cada módulo habla de otra cosa y las palabras que se
+vuelven ambiguas no se saben de antemano —, así que el contexto **sale del propio
+documento**: `contexto_del_documento()` junta el `#` y la prosa de debajo hasta 600
+caracteres. No para en el primer `##`: hay apuntes que van del título a la primera sección
+sin entradilla, y ahí «Técnicas de Extracción Invasivas» era todo el contexto — el chino
+tradujo la extracción como la **dental** (`侵入性拔牙技术`). Sigue las vallas de código en
+vez de reconocerlas a secas, o el `dd if=/dev/sda` de dentro se cuela como si fuera prosa.
+
+Cada proveedor lo usa como puede, y el que no puede no se entera:
+
+- **DeepL** tiene `context` nativo, que no se traduce y **no se cobra**: medido contra la
+  API, el mismo texto de 32 caracteres factura 32 con y sin 423 de contexto. Comprobado
+  con el código real: `产地选择` → `选择数据源` y `法医分析` → `取证分析`
+- **Gemini** lo mete en su prompt, que es lo mismo por otra vía
+- **Azure no tiene nada equivalente**. Su `category` es un modelo entrenado aparte (de
+  pago) y de su diccionario dinámico dice Microsoft que «solo es seguro para nombres
+  propios». Como es el fallback, esa pasada va sin contexto
+- **El refiner** es la red de seguridad, y no depende de quién tradujo: ya corre para
+  `{ar, zh, ja, ko, fa, he, ur}` —los idiomas donde el defecto es grave— y el contexto es
+  una coletilla de su `SYSTEM`, sin una petición de más
+
+`call_translate` lo pasa **solo por nombre** y solo a quien lo declare, igual que
+`source_lang`. Por posición no: es el cuarto argumento y su sitio depende de que
+`source_lang` venga puesto, así que un proveedor con `*args` lo recibiría descolocado.
+
+**No entra en la clave de la caché**, por lo mismo que `source_lang` y por algo más:
+meterlo invalidaría las ~16.000 traducciones que ya hay —una pasada entera son 204.628
+caracteres, el 41 % del cupo mensual gratuito— para reescribirlas con lo que ya dicen. Lo
+que viaja con contexto es el texto **nuevo**, que de todas formas iba a la API, así que
+esto mejora los módulos que vengan y no cuesta nada por los de antes. La consecuencia —dos
+documentos que compartan una línea exacta comparten su traducción— es aceptable: en líneas
+largas no pasa, y en las cortas el contexto del módulo es el mismo.
 
 ### Vistas y ancho del terminal
 `styles.elide()` es el único recorte y `styles.bloque()` es su contrario: lo que se dice

@@ -81,20 +81,61 @@ def _source_lang_mode(translator: "BaseTranslator") -> str | None:
     return mode
 
 
+# Quien acepta context. Cacheado por clase, como el de source_lang.
+_ACEPTA_CONTEXT: dict[type, bool] = {}
+
+
+def _acepta_context(translator: "BaseTranslator") -> bool:
+    """Si translate() admite context, y **solo por nombre**.
+
+    Por posicion no se pasa nunca: context es el cuarto argumento y su sitio depende
+    de que source_lang venga puesto, asi que un proveedor con *args lo recibiria
+    descolocado. Azure no lo acepta y no se entera de que existe.
+    """
+    cls = type(translator)
+    if cls in _ACEPTA_CONTEXT:
+        return _ACEPTA_CONTEXT[cls]
+
+    acepta = False
+    try:
+        params = _inspect.signature(translator.translate).parameters
+        param = params.get("context")
+        acepta = ((param is not None and param.kind is not param.POSITIONAL_ONLY)
+                  or any(p.kind is p.VAR_KEYWORD for p in params.values()))
+    except (TypeError, ValueError):
+        acepta = False
+
+    _ACEPTA_CONTEXT[cls] = acepta
+    return acepta
+
+
 def call_translate(translator: "BaseTranslator", texts: list[str], target_lang: str,
-                   source_lang: str | None = None) -> list[str]:
-    """Llama a translate() pasando source_lang solo si el proveedor lo acepta.
+                   source_lang: str | None = None,
+                   context: str | None = None) -> list[str]:
+    """Llama a translate() pasando source_lang y context solo si el proveedor los acepta.
 
     Un proveedor externo escrito contra la interfaz original —translate(texts,
     target_lang)— sigue funcionando sin tocarlo.
+
+    context dice de que van los apuntes para que el proveedor elija la acepcion
+    correcta. No se traduce, no viaja en la clave de cache y no todos lo tienen:
+    DeepL lo lleva nativo, Gemini lo mete en su prompt y Azure no tiene nada
+    equivalente (su `category` es un modelo entrenado aparte).
     """
+    args: list = [texts, target_lang]
+    kwargs: dict = {}
+
     if source_lang:
         mode = _source_lang_mode(translator)
         if mode == "keyword":
-            return translator.translate(texts, target_lang, source_lang=source_lang)
-        if mode == "positional":
-            return translator.translate(texts, target_lang, source_lang)
-    return translator.translate(texts, target_lang)
+            kwargs["source_lang"] = source_lang
+        elif mode == "positional":
+            args.append(source_lang)
+
+    if context and _acepta_context(translator):
+        kwargs["context"] = context
+
+    return translator.translate(*args, **kwargs)
 
 
 class TranslationError(Exception):
@@ -134,12 +175,17 @@ class BaseTranslator(ABC):
 
     @abstractmethod
     def translate(self, texts: list[str], target_lang: str,
-                  source_lang: str | None = None) -> list[str]:
+                  source_lang: str | None = None,
+                  context: str | None = None) -> list[str]:
         """Translate a list of strings to target_lang. Returns same-length list.
 
         source_lang es opcional: cuando se conoce, evita que el proveedor tenga que
         adivinar el idioma linea a linea (una opcion suelta como 'A) Josep Albors'
         se detecta mal). Sin el, el comportamiento es el de siempre.
+
+        context tambien: de que van los apuntes, para desambiguar. Un proveedor que no
+        lo declare no lo recibe (ver call_translate), asi que anadirlo aqui no obliga a
+        nadie a implementarlo.
         """
         pass
 
@@ -153,11 +199,12 @@ class FallbackTranslator(BaseTranslator):
         self.translators = translators
 
     def translate(self, texts: list[str], target_lang: str,
-                  source_lang: str | None = None) -> list[str]:
+                  source_lang: str | None = None,
+                  context: str | None = None) -> list[str]:
         errors: list[str] = []
         for t in self.translators:
             try:
-                return call_translate(t, texts, target_lang, source_lang)
+                return call_translate(t, texts, target_lang, source_lang, context)
             except TranslationError as e:
                 errors.append(f"{type(t).__name__}: {e}")
         raise TranslationError(
@@ -173,14 +220,16 @@ class ProtectedTranslator(BaseTranslator):
         self.name = translator.name
 
     def translate(self, texts: list[str], target_lang: str,
-                  source_lang: str | None = None) -> list[str]:
+                  source_lang: str | None = None,
+                  context: str | None = None) -> list[str]:
         protected_texts = []
         all_tokens: list[list[str]] = []
         for text in texts:
             protected, tokens = _protect_tokens(text)
             protected_texts.append(protected)
             all_tokens.append(tokens)
-        translated = call_translate(self.translator, protected_texts, target_lang, source_lang)
+        translated = call_translate(self.translator, protected_texts, target_lang,
+                                    source_lang, context)
         if len(translated) != len(protected_texts):
             raise TranslationError(
                 f"{self.name} returned {len(translated)} translations "

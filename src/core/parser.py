@@ -71,6 +71,68 @@ def conserva_la_parte(md: str, nombre: str) -> str:
     return md[:m.start()] + f"{m.group(1)}{limpio} {parte}" + md[m.end():]
 
 
+# De qué van estos apuntes, para que el traductor elija la acepción correcta. Sale del
+# propio documento —el título y su párrafo de resumen— y no de un glosario escrito a mano,
+# porque cada módulo habla de otra cosa y las palabras que se vuelven ambiguas no se saben
+# de antemano. El tope existe porque es contexto, no contenido: DeepL lo recorta y un
+# prompt con medio documento dentro deja de ser una pista.
+_TOPE_CONTEXTO = 600
+
+# Lo que no es prosa: listas, tablas, citas, vallas de código y encabezados. Una lista de
+# viñetas dice de qué va el documento mucho peor que su párrafo de entrada.
+_NO_ES_PROSA_RE = re.compile(r"^\s*(#|-|\*|>|\||`{3,}|~{3,}|\d+[.)]\s)")
+
+
+def contexto_del_documento(md: str, tope: int = _TOPE_CONTEXTO) -> str:
+    """El título y el resumen del documento, en una cadena. API: str, "" si no hay.
+
+    Va al traductor como contexto y no se traduce: "Selección del Origen" a secas daba
+    en chino "产地选择" —la procedencia de un producto— y "Análisis Forense" daba
+    "法医分析", el forense de las autopsias. Con el contexto delante salen "来源选择" y
+    "取证分析", que es lo que dicen los apuntes. El defecto no es del traductor: cada
+    línea viaja sola y "forense" en español es las dos cosas.
+    """
+    lineas = md.splitlines()
+    m = None
+    for i, linea in enumerate(lineas):
+        m = HEADING_RE.match(linea)
+        if m and len(m.group(1)) == 1:
+            break
+        m = None
+    if m is None:
+        return ""
+
+    piezas = [m.group(2).strip()]
+    largo  = len(piezas[0])
+    # No se para en el primer "##": hay apuntes que van del título a la primera sección
+    # sin entradilla, y ahí el contexto se quedaba en cuatro palabras. "Técnicas de
+    # Extracción Invasivas" a secas no dice si la extracción es de datos o de muelas —y
+    # el chino eligió muelas—, así que se sigue recogiendo prosa por debajo.
+    dentro_de_valla = False
+    for linea in lineas[i + 1:]:
+        if largo >= tope:
+            break
+        # La valla hay que seguirla, no solo reconocerla: filtrando únicamente la línea
+        # de los backticks, el `dd if=/dev/sda` de dentro se colaba como si fuera prosa.
+        if FENCE_RE.match(linea.strip()):
+            dentro_de_valla = not dentro_de_valla
+            continue
+        if dentro_de_valla or not linea.strip() or _NO_ES_PROSA_RE.match(linea):
+            continue
+        piezas.append(linea.strip())
+        largo += len(linea)
+
+    return _hasta_la_ultima_palabra(" ".join(piezas), tope)
+
+
+def _hasta_la_ultima_palabra(texto: str, tope: int) -> str:
+    """El texto recortado al tope sin partir la última palabra. API: str."""
+    if len(texto) <= tope:
+        return texto
+    corte = texto.rfind(" ", 0, tope)
+    return texto[:corte if corte > 0 else tope].rstrip()
+
+
 def parse_markdown_lines(lines: list[str]) -> list[LineInfo]:
     """Classify each Markdown line and extract translatable text.
 
