@@ -31,6 +31,10 @@ Rules:
 - Ordered steps use "1. 2. 3."
 - Never fake headings with **bold** inside lists
 - Each heading must be followed by at least one paragraph before any list
+- Each heading must stand on its own: someone reading only the headings must know
+  what each one refers to. Never a bare ambiguous noun — write "Source data
+  selection", not "Selection of Origin". A heading is translated as an isolated
+  string, so what it leaves out cannot be recovered from the paragraph below
 - Remove greetings, author names, URLs, chapter numbers from titles
 - When the source filename is given and ends with a part indicator like (I), (II) or
   (III), the title MUST end with that same indicator, parentheses included
