@@ -62,7 +62,8 @@ def test_un_proveedor_con_kwargs_se_considera_compatible():
 
 # ── ProtectedTranslator ───────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("fragmento", ["`ls -la`", "$E = mc^2$", "https://ejemplo.com/x?a=1"])
+@pytest.mark.parametrize("fragmento", ["`ls -la`", "$E = mc^2$", "https://ejemplo.com/x?a=1",
+                                       "[C]{.notranslate}"])
 def test_el_contenido_protegido_sobrevive_a_la_traduccion(fragmento):
     class Mayusculas(BaseTranslator):
         name = "up"

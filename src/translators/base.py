@@ -7,6 +7,11 @@ _INLINE_CODE_RE    = _re.compile(r'`[^`\n]+`')
 _FORMULA_BLOCK_RE  = _re.compile(r'\$\$[\s\S]+?\$\$')
 _FORMULA_INLINE_RE = _re.compile(r'\$[^$\n]+\$')
 _URL_RE            = _re.compile(r'https?://\S+')
+# Lo que quien escribe marca para que no se traduzca: "[C]{.notranslate}", como el
+# translate="no" de HTML. Desde fuera no hay forma de saber qué palabra de una línea no
+# debe traducirse: la letra de "Respuesta: C" la cambiaba el árabe por "ج", y entonces
+# no apuntaba a ninguna opción. Pandoc pinta el span como texto normal.
+_NO_TRADUCIR_RE    = _re.compile(r'\[[^\]\n]*\]\{[^}\n]*\.notranslate\b[^}\n]*\}')
 
 
 def _protect_tokens(text: str) -> tuple[str, list[str]]:
@@ -14,7 +19,8 @@ def _protect_tokens(text: str) -> tuple[str, list[str]]:
     def _replace(m: _re.Match) -> str:
         tokens.append(m.group(0))
         return f"⟦{len(tokens)-1}⟧"
-    out = _FORMULA_BLOCK_RE.sub(_replace, text)
+    out = _NO_TRADUCIR_RE.sub(_replace, text)
+    out = _FORMULA_BLOCK_RE.sub(_replace, out)
     out = _FORMULA_INLINE_RE.sub(_replace, out)
     out = _INLINE_CODE_RE.sub(_replace, out)
     out = _URL_RE.sub(_replace, out)

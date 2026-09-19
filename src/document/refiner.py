@@ -28,10 +28,12 @@ try:
     from ..ai.base import (MAX_ESPERA, MAX_INTENTOS, PISTAS_CUOTA, AIError,
                            cambio_de_modelo, espera_pedida)
     from ..ai.registry import get_model
+    from ..core.parser import LETRA_DE_LISTA
 except ImportError:
     from ai.base import (MAX_ESPERA, MAX_INTENTOS, PISTAS_CUOTA, AIError,
                          cambio_de_modelo, espera_pedida)
     from ai.registry import get_model
+    from core.parser import LETRA_DE_LISTA
 
 console = Console(stderr=True)
 
@@ -94,7 +96,7 @@ def parse_nodes(lines: list[str]) -> list[Node]:
         if bq:
             nodes.append(Node("blockquote", line, bq.group(2), bq.group(1)))
             continue
-        li = re.match(r'^(\s*(?:[-*+]|\d+\.)\s)(.*)', line)
+        li = re.match(rf'^(\s*(?:[-*+]|\d+\.|{LETRA_DE_LISTA})\s)(.*)', line)
         if li:
             nodes.append(Node("list_item", line, li.group(2), li.group(1)))
             continue
@@ -103,10 +105,14 @@ def parse_nodes(lines: list[str]) -> list[Node]:
     return nodes
 
 
+# El span con atributos ("[C]{.notranslate}") va antes que el enlace: con el enlace
+# primero, su ".*?" se estira desde el "[" del span hasta el "](" del siguiente enlace de
+# la línea y se lleva por delante todo lo de en medio.
 INLINE_RE = re.compile(
     r'(`[^`]+`'
     r'|\*{1,3}[^*\n]+\*{1,3}'
     r'|_{1,3}[^_\n]+_{1,3}'
+    r'|\[[^\]\n]*\]\{[^}\n]*\}'
     r'|\[.*?\]\(.*?\)'
     r')'
 )

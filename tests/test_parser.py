@@ -149,3 +149,32 @@ def test_el_recorte_no_parte_la_ultima_palabra():
     assert len(c) <= 50
     assert not c.endswith("palabr")
     assert c.split()[-1] == "palabra"
+
+
+# ── listas con letra ─────────────────────────────────────────────────────────
+# La letra es estructura: mandándola al traductor, el árabe devolvía "أ)" y el chino
+# "A）", Pandoc dejaba de ver la lista y la solución "C" no apuntaba a ninguna opción.
+
+OPCIONES = ["A) Superior a 60 dB", "", "b) Superior a 30 dB", "", "  c. Superior a 45 dB"]
+
+
+def test_la_letra_de_una_opcion_no_viaja_al_traductor():
+    assert _textos(parse_markdown_lines(OPCIONES)) == [
+        "Superior a 60 dB", "Superior a 30 dB", "Superior a 45 dB"]
+
+
+def test_la_letra_vuelve_a_su_sitio_con_la_traduccion():
+    parsed = parse_markdown_lines(OPCIONES)
+    salida = rebuild_markdown_from_translations(parsed, ["أكثر من 60", "أكثر من 30", "أكثر من 45"])
+    assert salida == ["A) أكثر من 60", "", "b) أكثر من 30", "", "  c. أكثر من 45"]
+
+
+def test_una_inicial_con_punto_es_prosa_y_no_una_lista():
+    """Igual que para Pandoc: "B. Russell…" con un solo espacio no es el punto B."""
+    assert parse_markdown_lines(["B. Russell fue un filósofo."]) == [
+        ("body", "", "B. Russell fue un filósofo.")]
+
+
+def test_las_opciones_no_son_contexto():
+    md = "# Test\n\nRepaso de las jaulas de Faraday.\n\nA) Superior a 60 dB\n"
+    assert contexto_del_documento(md) == "Test Repaso de las jaulas de Faraday."

@@ -468,3 +468,26 @@ def test_la_fila_del_modelo_cabe_con_refs_de_dos_proveedores(ancho):
     # La continuacion de un aviso largo no empieza en la columna 0.
     sigue = [l for l in lineas if "gpt-oss" in l or "flash-lite" in l]
     assert sigue and all(l.startswith(" ") for l in sigue)
+
+
+# ------------------------------------------------------------ lo que el modelo no ve
+# La letra de una lista y lo marcado como {.notranslate} no pasan por el modelo: el árabe
+# convertía la "A)" en "أ)" y la "C" de la solución en otra letra.
+
+class Eco(Fijo):
+    """Devuelve lo que recibe, y se lo guarda."""
+    def complete(self, prompt, system="", temperature=0.2):
+        self.visto = prompt
+        return prompt.split("\n\n", 1)[1]
+
+
+def test_ni_la_letra_ni_lo_marcado_llegan_al_modelo(monkeypatch):
+    eco = Eco()
+    monkeypatch.setattr(refiner, "get_model", lambda *a, **k: eco)
+
+    lineas = ["A) أكثر من 60", "", "Respuesta: [C]{.notranslate} y [otra](https://x.y)"]
+    out, aviso, _ = refiner.refine_markdown(lineas, "ar")
+
+    assert aviso is None and out == lineas
+    assert "A)" not in eco.visto and "{.notranslate}" not in eco.visto
+    assert "(https://x.y)" not in eco.visto     # el span no se traga el enlace de al lado

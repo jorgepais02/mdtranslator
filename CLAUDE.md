@@ -379,7 +379,12 @@ Añadir proveedor = crear clase que extiende `BaseTranslator`, añadirla al dict
 fila en `langs.py`. El wizard **saca la lista de ahí**, no de una constante paralela: era
 tocar tres sitios y olvidarse de uno (Gemini estaba registrado y no aparecía en el menú).
 Los proveedores sin clave se ven en gris y no se pueden elegir.
-`ProtectedTranslator` sustituye código inline, fórmulas `$…$` y URLs por placeholders `⟦n⟧`.
+`ProtectedTranslator` sustituye código inline, fórmulas `$…$`, URLs y los spans
+`[x]{.notranslate}` por placeholders `⟦n⟧`. El span es la única forma de decir desde el
+Markdown que algo no se traduce: una letra que remite a una opción (`C`) el árabe la
+cambiaba por `ج`. Por lo mismo, la letra de una lista `A)`/`b)`/`c.` es prefijo
+estructural en `parser.py` y en el refiner, igual que `1.`: traducida salía `أ)` o `A）`
+y Pandoc dejaba de ver la lista.
 
 ### Compatibilidad de la interfaz `translate()`
 `BaseTranslator.translate` acepta un tercer argumento **opcional** `source_lang`. Nada lo

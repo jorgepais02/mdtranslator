@@ -11,6 +11,14 @@ HR_RE       = re.compile(r"^\s*---\s*$")
 FENCE_RE    = re.compile(r"^(`{3,}|~{3,})")
 TABLE_SEP_RE = re.compile(r"^\|?[\s|:\-]+\|[\s|:\-]*$")  # |---|---| rows
 
+# Las listas con letra ("A)", "b)", "c."): Pandoc las convierte en una lista de verdad, así
+# que la letra es estructura y no texto. Mandándola al traductor, el árabe la devolvía
+# como "أ)" y el chino como "A）": Pandoc dejaba de ver la lista —se iba la sangría— y una
+# solución que decía "C" ya no apuntaba a ninguna opción. "A." con un solo espacio no
+# cuenta, igual que para Pandoc: "B. Russell fue un filósofo" es prosa, no el punto B.
+LETRA_DE_LISTA = r"[A-Za-z]\)|[a-z]\."
+LETTER_RE   = re.compile(rf"^(\s*)({LETRA_DE_LISTA})\s+(.*\S)\s*$")
+
 LineInfo = tuple[str, str, str]
 
 # La parte de un tema repartido en varios apuntes, tal y como la escribe el nombre del
@@ -80,7 +88,7 @@ _TOPE_CONTEXTO = 600
 
 # Lo que no es prosa: listas, tablas, citas, vallas de código y encabezados. Una lista de
 # viñetas dice de qué va el documento mucho peor que su párrafo de entrada.
-_NO_ES_PROSA_RE = re.compile(r"^\s*(#|-|\*|>|\||`{3,}|~{3,}|\d+[.)]\s)")
+_NO_ES_PROSA_RE = re.compile(rf"^\s*(#|-|\*|>|\||`{{3,}}|~{{3,}}|\d+[.)]\s|(?:{LETRA_DE_LISTA})\s)")
 
 
 def contexto_del_documento(md: str, tope: int = _TOPE_CONTEXTO) -> str:
@@ -205,6 +213,12 @@ def parse_markdown_lines(lines: list[str]) -> list[LineInfo]:
         m = NUMBER_RE.match(line)
         if m:
             parsed.append(("number", f"{m.group(1)}{m.group(2)}.", m.group(3)))
+            continue
+
+        # ── lettered list: "A)" viaja como prefijo, igual que "1." ─────────
+        m = LETTER_RE.match(line)
+        if m:
+            parsed.append(("number", f"{m.group(1)}{m.group(2)}", m.group(3)))
             continue
 
         # ── body paragraph ───────────────────────────────────────────────
