@@ -697,6 +697,18 @@ eso, al restaurar, una línea cuyas marcas no han vuelto **enteras** se queda co
 traducción cruda: se lee, y `⟦0⟧` no. Refinar nunca puede dejar el documento peor de lo
 que estaba, que es la misma regla de `_conserva_lo_refinado()`.
 
+La misma regla para el idioma: una línea que llegó con letras de su alfabeto y vuelve sin
+ninguna (`_en_su_idioma`) se queda con la traducción cruda. Pasó en el módulo 19: un lote
+de líneas cortas de un documento árabe volvió entero **en español**, y encima reescrito
+—«Integridad» pasó a «Seguridad»—. El `SYSTEM` decía `editor for AR` y detrás llevaba el
+contexto del documento, que está en el idioma de origen, así que el modelo se quedaba con
+el idioma que sí veía. Ahora el prompt nombra el idioma (`_ESCRITURA`: «Arabic», no `AR`)
+y lo que vuelve se comprueba. Una línea sin alfabeto propio (`SHA-256`, `IEEE 299`) no
+tiene nada que comprobar. Lo rechazado **no se guarda en la caché**, para que la siguiente
+pasada lo pida otra vez, y lo que ya estaba cacheado pasa por la misma comprobación al
+leerlo: si no, el español guardado antes del arreglo seguiría saliendo en 0,0s en cada
+relanzamiento.
+
 ### Limpieza en modo solo-Drive
 Cuando la salida es solo Drive, los ficheros locales son scratch. Se borran **solo los que
 esta ejecución ha creado** (`scratch`), y las carpetas con `rmdir()`, que falla si no están

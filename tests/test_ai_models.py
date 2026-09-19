@@ -412,6 +412,42 @@ def test_una_marca_que_vuelve_entera_si_se_refina(monkeypatch):
     assert out == ["ahora con _termino_ y mejor escrito."]
 
 
+# ------------------------------------------------------------ una linea en otro idioma
+# Con "editor for AR" y el contexto del documento —en español— pegado al SYSTEM, un lote
+# de lineas cortas de un documento arabe del modulo 19 volvio entero en español, y
+# reescrito: "Integridad, disponibilidad…" paso a "Seguridad, disponibilidad…".
+
+def test_una_linea_que_vuelve_en_otro_idioma_se_queda_sin_refinar(monkeypatch):
+    mezcla = Fijo(respuesta="1. Seguridad, disponibilidad y confidencialidad\n"
+                            "2. السلامة والأصالة")
+    monkeypatch.setattr(refiner, "get_model", lambda *a, **k: mezcla)
+
+    lineas = ["A) النزاهة والتوافر والسرية", "", "B) النزاهة والأصالة"]
+    out, aviso, _ = refiner.refine_markdown(lineas, "ar")
+
+    assert aviso is None
+    assert out == ["A) النزاهة والتوافر والسرية", "", "B) السلامة والأصالة"]
+
+
+def test_una_linea_sin_alfabeto_propio_no_tiene_nada_que_comprobar():
+    """"SHA-256" o un nombre de producto no dicen en qué idioma está la línea."""
+    assert refiner._en_su_idioma("SHA-256", "SHA-256 o MD5", "ar")
+    assert refiner._en_su_idioma("取证分析", "数字取证分析", "zh")
+    assert not refiner._en_su_idioma("取证分析", "Análisis forense", "zh")
+    assert refiner._en_su_idioma("texto", "otro", "xx")          # idioma sin alfabeto
+
+
+def test_el_prompt_nombra_el_idioma_y_no_da_solo_el_codigo():
+    class Espia(Fijo):
+        def complete(self, prompt, system="", temperature=0.2):
+            self.system = system
+            return "1. ok"
+
+    espia = Espia()
+    refiner._una_llamada(["uno"], "ar", espia, contexto="apuntes en español")
+    assert "Arabic" in espia.system and "for AR" not in espia.system
+
+
 def test_el_formateo_de_txt_tampoco_los_deja():
     from integrations.generate_md import _strip_fences
 

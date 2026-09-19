@@ -133,13 +133,47 @@ def restore_inline(text: str, tokens: dict) -> str:
 
 SYSTEM = (
     "You are a native-speaker editor for {lang}. "
-    "You receive numbered plain-text lines from auto-translated academic notes. "
+    "You receive numbered plain-text lines in {lang} from auto-translated academic notes. "
     "Humanize and naturalize each line so it sounds completely fluent. "
     "Rules: return ONLY the numbered lines — same count, same order. "
+    "Every line stays in {lang}: never translate a line into another language. "
     "Preserve placeholders like ⟦0⟧ ⟦1⟧ exactly. "
     "Do not change proper nouns, acronyms, or technical terms. "
     "If a line is already natural, return it unchanged."
 )
+
+# El idioma va por su nombre y no por el código: con "editor for AR" y el contexto del
+# documento —que está en el idioma de origen— pegado detrás, un lote de líneas cortas de
+# un documento árabe del módulo 19 volvió entero en español, y reescrito ("Integridad"
+# pasó a "Seguridad"). Todos los idiomas que se refinan (styles.needs_refine) tienen
+# alfabeto propio, y con él se comprueba que lo que vuelve sigue en su idioma. Uno que
+# falte aquí se refina igual, con el código en el prompt y sin esa comprobación.
+_ESCRITURA = {
+    "ar": ("Arabic",   "؀-ۿ"),
+    "fa": ("Persian",  "؀-ۿ"),
+    "ur": ("Urdu",     "؀-ۿ"),
+    "he": ("Hebrew",   "֐-׿"),
+    "zh": ("Chinese",  "一-鿿"),
+    "ja": ("Japanese", "぀-ヿ一-鿿"),
+    "ko": ("Korean",   "가-힯"),
+}
+
+
+def _escritura(lang_code: str) -> tuple[str, str | None]:
+    return _ESCRITURA.get(lang_code.split("-")[0].lower(), (lang_code.upper(), None))
+
+
+def _en_su_idioma(original: str, refinado: str, lang_code: str) -> bool:
+    """False si el modelo devolvió en otro idioma una línea que estaba en el suyo.
+
+    Solo se puede decir de una línea que usaba el alfabeto del idioma: la que era
+    "SHA-256" o un nombre de producto no tiene nada que comprobar.
+    """
+    letras = _escritura(lang_code)[1]
+    if not letras:
+        return True
+    alfabeto = re.compile(f"[{letras}]")
+    return not alfabeto.search(original) or bool(alfabeto.search(refinado))
 
 # De que van los apuntes, pegado al SYSTEM. Es la red de seguridad de los idiomas que
 # refinan: DeepL tiene su parametro `context` y Gemini lo mete en su prompt, pero **Azure
@@ -231,7 +265,7 @@ def _llamar_modelo(texts: list[str], lang: str, modelo, cancelado=None,
 def _una_llamada(texts: list[str], lang: str, modelo,
                  contexto: str | None = None) -> tuple[list[str], str | None]:
     numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
-    system = SYSTEM.format(lang=lang.upper())
+    system = SYSTEM.format(lang=_escritura(lang)[0])
     if contexto:
         system += CONTEXTO.format(contexto=contexto)
     raw = modelo.complete(
@@ -266,7 +300,9 @@ def _refinar(textos: list[str], lang_code: str, modelo, cache, cancelado,
     if cache is not None:
         for t in dict.fromkeys(textos):
             guardado = cache.get(t, lang_code, CACHE_PROVIDER)
-            if guardado is not None:
+            # Lo que se guardó antes de mirar el idioma puede estar en otro: se vuelve a
+            # pedir, y la respuesta buena lo sustituye.
+            if guardado is not None and _en_su_idioma(t, guardado, lang_code):
                 hechos[t] = guardado
 
     faltan = [t for t in dict.fromkeys(textos) if t not in hechos]
@@ -275,9 +311,13 @@ def _refinar(textos: list[str], lang_code: str, modelo, cache, cancelado,
         salida, aviso = _llamar_modelo(lote, lang_code, modelo, cancelado, contexto)
         if aviso:
             return None, aviso
+        # Una línea que vuelve en otro idioma se queda con la traducción cruda, que es
+        # la regla de las marcas rotas: refinar nunca deja el documento peor. Y no se
+        # guarda, para que la próxima pasada lo intente otra vez.
+        buenas = {t: s for t, s in zip(lote, salida) if _en_su_idioma(t, s, lang_code)}
         if cache is not None:
-            cache.set_many(list(zip(lote, salida)), lang_code, CACHE_PROVIDER)
-        hechos.update(zip(lote, salida))
+            cache.set_many(list(buenas.items()), lang_code, CACHE_PROVIDER)
+        hechos.update({t: buenas.get(t, t) for t in lote})
 
     return [hechos[t] for t in textos], None
 

@@ -118,6 +118,31 @@ def test_solo_viaja_lo_que_falta():
     assert c.llamadas == 1
 
 
+def test_lo_guardado_en_otro_idioma_se_vuelve_a_pedir():
+    """Se guardó antes de que se mirara el idioma: darlo por refinado lo dejaría así
+    para siempre, porque relanzar no volvería a preguntar."""
+    cache = CacheFalsa()
+    cache.set_many([("أكثر من 30 ديسيبل", "Más de 30 decibelios")], "ar",
+                   refiner.CACHE_PROVIDER)
+    c = ModeloFalso()
+    salida, _ = refiner._refinar(["أكثر من 30 ديسيبل"], "ar", c, cache, None)
+    assert salida == ["refinado أكثر من 30 ديسيبل"]
+    assert c.llamadas == 1
+    assert cache.get("أكثر من 30 ديسيبل", "ar", refiner.CACHE_PROVIDER) == salida[0]
+
+
+def test_lo_que_vuelve_en_otro_idioma_no_se_guarda():
+    class Espanol(ModeloFalso):
+        def complete(self, prompt, system="", temperature=0.2):
+            self.llamadas += 1
+            return "1. Más de 30 decibelios"
+
+    cache = CacheFalsa()
+    salida, _ = refiner._refinar(["أكثر من 30 ديسيبل"], "ar", Espanol(), cache, None)
+    assert salida == ["أكثر من 30 ديسيبل"]           # la traducción cruda
+    assert cache.get("أكثر من 30 ديسيبل", "ar", refiner.CACHE_PROVIDER) is None
+
+
 def test_una_linea_repetida_se_paga_una_vez():
     c = ModeloFalso()
     # "Fuente: INCIBE" sale veinte veces en unos apuntes; mandarla veinte veces era
