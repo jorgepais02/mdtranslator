@@ -24,7 +24,7 @@ from core.parser import (conserva_la_parte, contexto_del_documento, parse_markdo
                          quita_la_parte, rebuild_markdown_from_translations)
 from core.docgen import generate_docx_document, convert_many_to_pdf
 from core.config import TRANSLATED_DIR, DRIVE_FOLDER_ID, CONFIG
-from core.sources import collect_sources, load_markdown, needs_formatting
+from core.sources import collect_sources, load_markdown, lote_de, needs_formatting
 from integrations.drive import GoogleDocsManager
 
 
@@ -746,9 +746,13 @@ def run_pipeline(config: dict) -> list[dict]:
                 if cancelled.is_set():
                     raise KeyboardInterrupt
 
-                lang_folder = TRANSLATED_DIR / slug
+                # Cada módulo en su carpeta: todos traen un Test.md (ver lote_de).
+                lote        = lote_de(doc.path)
+                lang_folder = TRANSLATED_DIR / slug / lote if lote else TRANSLATED_DIR / slug
                 lang_folder.mkdir(parents=True, exist_ok=True)
                 with folders_lock:
+                    used_folders.update(lang_folder.parents[i]
+                                        for i in range(len(lote.parts) if lote else 0))
                     used_folders.add(lang_folder)
 
                 out_file  = lang_folder / f"{_local_stem(doc.stem, slug)}.md"
@@ -891,7 +895,8 @@ def run_pipeline(config: dict) -> list[dict]:
                 f.unlink(missing_ok=True)
             except OSError:
                 pass
-        for folder in used_folders:
+        # La del lote antes que la del idioma, o la del idioma nunca estaría vacía.
+        for folder in sorted(used_folders, key=lambda f: len(f.parts), reverse=True):
             try:
                 folder.rmdir()          # solo si quedo vacia
             except OSError:

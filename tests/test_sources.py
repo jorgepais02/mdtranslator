@@ -1,8 +1,10 @@
 """Descubrimiento de fuentes: qué fichero entra y cuál gana cuando hay duplicados."""
 
+from pathlib import Path
+
 import pytest
 
-from core.sources import (ALL_FILES, collect_sources, list_source_folders,
+from core.sources import (ALL_FILES, collect_sources, list_source_folders, lote_de,
                           needs_formatting)
 
 
@@ -113,3 +115,31 @@ def test_list_source_folders_omite_las_vacias(con_lote):
 
 def test_list_source_folders_sin_sources_no_revienta(tmp_path):
     assert list_source_folders(tmp_path / "nope") == []
+
+
+# ── lote_de: de qué módulo sale una fuente, para no mezclar sus salidas ──────
+
+def test_dos_modulos_con_el_mismo_fichero_son_lotes_distintos(con_lote):
+    # Todos los módulos traen un Test.md, y con la salida en translated/{lang}/ a secas
+    # el del M20 pisó el del M19.
+    (con_lote / "modulo-20").mkdir()
+    m19 = con_lote / "modulo-19" / "Test.md"
+    m20 = con_lote / "modulo-20" / "Test.md"
+    assert lote_de(m19, con_lote) == Path("modulo-19")
+    assert lote_de(m20, con_lote) == Path("modulo-20")
+
+
+def test_una_fuente_suelta_no_es_de_ningun_lote(con_lote):
+    assert lote_de(con_lote / "apuntes.md", con_lote) is None
+
+
+def test_una_fuente_de_fuera_de_sources_no_es_de_ningun_lote(con_lote, tmp_path_factory):
+    fuera = tmp_path_factory.mktemp("fuera") / "modulo-19" / "Test.md"
+    assert lote_de(fuera, con_lote) is None
+
+
+def test_el_lote_sale_igual_con_ruta_relativa(con_lote, monkeypatch):
+    # collect_sources devuelve lo que le dan: "sources/modulo-19/x.md" llega relativa.
+    monkeypatch.chdir(con_lote.parent)
+    relativa = Path(con_lote.name) / "modulo-19" / "clase1.txt"
+    assert lote_de(relativa, con_lote) == Path("modulo-19")

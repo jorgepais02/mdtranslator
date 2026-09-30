@@ -63,7 +63,7 @@ src/
 tests/                    # pytest, sin red ni credenciales (ver §9)
 sources/                  # Archivos .md/.txt de entrada
 templates/                # template_ltr.docx + template_rtl.docx (referencia Pandoc)
-translated/               # Salida: translated/{lang}/{stem}.{lang}.{md,docx,pdf} (gitignored)
+translated/               # Salida: translated/{lang}/[{lote}/]{stem}.{lang}.{md,docx,pdf} (gitignored)
 cache/                    # translations.db (gitignored)
 secrets/                  # credentials.json + token.json (gitignored)
 public/header.png         # Imagen de cabecera opcional para DOCX
@@ -784,6 +784,14 @@ como una opción más (`list_source_folders`, que dice también cuántas fuentes
 vacías no salen). `ALL_FILES` son los ficheros **sueltos** de `sources/`, no todo el árbol,
 y `_en_carpeta` no baja a las subcarpetas: bajando, "todos los de este módulo" arrastraría
 los del anterior en cuanto se anidaran dos.
+
+La salida local de un lote va a `translated/{lang}/{lote}/` (`sources.lote_de`); la de una
+fuente suelta o de fuera de `sources/`, a `translated/{lang}/` como siempre. Todos los
+módulos traen un `Test.md`, y con una sola carpeta por idioma el del M20 pisó el local del
+M19. Drive no lo notó, porque van a carpetas distintas; lo grave era
+`_conserva_lo_refinado()`: relanzar el del M19 sin cuota habría encontrado en disco el del
+M20, más nuevo que su fuente, y lo habría subido a la carpeta del M19 como si fuera el
+suyo.
 
 ---
 

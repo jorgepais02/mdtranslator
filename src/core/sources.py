@@ -4,6 +4,7 @@ Descubrimiento y normalización de ficheros fuente.
 API:
     collect_sources(selection, sources_dir=SOURCES_DIR) -> list[Path]
     list_source_folders(sources_dir=SOURCES_DIR) -> list[tuple[Path, int]]
+    lote_de(path, sources_dir=SOURCES_DIR) -> Path | None
     needs_formatting(path) -> bool
     load_markdown(path, allow_format=True) -> tuple[str, str | None]
 """
@@ -83,6 +84,23 @@ def list_source_folders(sources_dir: Path = SOURCES_DIR) -> list[tuple[Path, int
              for d in sorted(sources_dir.iterdir(), key=lambda p: p.name.lower())
              if d.is_dir()]
     return [(d, n) for d, n in lotes if n]
+
+
+def lote_de(path: Path, sources_dir: Path = SOURCES_DIR) -> Path | None:
+    """La subcarpeta de sources/ de la que sale una fuente, o None si va suelta. API: Path.
+
+    Es lo que separa las salidas de dos módulos en translated/. Todos los módulos traen un
+    Test.md, y con la salida en translated/{lang}/ a secas el del M20 pisó el del M19. Lo
+    grave no era eso sino _conserva_lo_refinado(): relanzando el del M19 sin cuota habría
+    encontrado en disco el del M20, más nuevo que su fuente, y lo habría subido a la
+    carpeta del M19 como si fuera el suyo. Una fuente de fuera de sources/ no es de ningún
+    lote y sigue saliendo donde siempre.
+    """
+    try:
+        relativa = path.resolve().relative_to(sources_dir.resolve())
+    except ValueError:
+        return None
+    return relativa.parent if relativa.parent != Path(".") else None
 
 
 def needs_formatting(path: Path) -> bool:
