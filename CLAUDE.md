@@ -709,6 +709,13 @@ pasada lo pida otra vez, y lo que ya estaba cacheado pasa por la misma comprobac
 leerlo: si no, el español guardado antes del arreglo seguiría saliendo en 0,0s en cada
 relanzamiento.
 
+Y la misma regla para el largo (`_entera`). `gemini-3.5-flash-lite`, refinando el módulo
+20, dejó siete de ocho párrafos árabes en su primera frase (515 → 149 caracteres): en su
+idioma, con sus marcas y bien escritos, así que pasó todo y se subió. El largo solo no
+basta, porque fundir frases con comas sin perder nada llega a encoger al 0,81 (medido
+sobre las 744 líneas refinadas de M19 y M20): bajo dos tercios se rechaza siempre, y bajo
+el 0,9 solo si además vuelven menos frases. Las de menos de 40 caracteres no se miden.
+
 ### El formateo vuelve en su idioma y entero
 `generate_md` formatea el `.txt` con el mismo modelo y en el módulo 20 falló de las dos
 formas que el refinador ya conocía, un paso antes: cuatro de seis transcripciones

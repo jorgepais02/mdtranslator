@@ -138,6 +138,8 @@ SYSTEM = (
     "Rules: return ONLY the numbered lines — same count, same order. "
     "Every line stays in {lang}: never translate a line into another language. "
     "Preserve placeholders like ⟦0⟧ ⟦1⟧ exactly. "
+    "Keep every sentence and every detail: polish the wording, never shorten or "
+    "summarize a line. "
     "Do not change proper nouns, acronyms, or technical terms. "
     "If a line is already natural, return it unchanged."
 )
@@ -174,6 +176,33 @@ def _en_su_idioma(original: str, refinado: str, lang_code: str) -> bool:
         return True
     alfabeto = re.compile(f"[{letras}]")
     return not alfabeto.search(original) or bool(alfabeto.search(refinado))
+
+
+# Tampoco puede volver resumida. gemini-3.5-flash-lite, refinando el módulo 20, dejó
+# siete de ocho párrafos árabes en su primera frase (515 → 149 caracteres): estaba en su
+# idioma, conservaba sus marcas y se leía bien, así que pasó todo y se subió. Y lo hace
+# también con disimulo: funde las frases con comas y suelta la última, y así una línea
+# al 0,87 había perdido «Recuperar un sistema exige confianza…». Por eso el largo solo
+# no basta — medido sobre las 744 líneas refinadas de M19 y M20, fundir frases sin
+# perder nada llega a encoger al 0,81 — y la regla cruza las dos cosas: bajo dos
+# tercios se rechaza siempre, y bajo el 0,9 si además hay menos frases. Rechazar de más
+# sale barato, porque la línea se queda con la traducción cruda; dejar pasar un recorte
+# no. Las cortas no se miden: en 30 caracteres, cambiar una expresión ya mueve un 20 %.
+_MIN_LARGO   = 2 / 3
+_SI_FUNDE    = 0.9
+_MIN_MEDIBLE = 40
+_FIN_DE_FRASE = re.compile(r"[。！？]|[.!?؟](?=\s|$)")
+
+
+def _entera(original: str, refinado: str) -> bool:
+    """False si el modelo resumió la línea en vez de pulirla."""
+    if len(original) < _MIN_MEDIBLE:
+        return True
+    largo = len(refinado) / len(original)
+    if largo < _MIN_LARGO:
+        return False
+    return (largo >= _SI_FUNDE or len(_FIN_DE_FRASE.findall(refinado))
+            >= len(_FIN_DE_FRASE.findall(original)))
 
 # De que van los apuntes, pegado al SYSTEM. Es la red de seguridad de los idiomas que
 # refinan: DeepL tiene su parametro `context` y Gemini lo mete en su prompt, pero **Azure
@@ -300,9 +329,10 @@ def _refinar(textos: list[str], lang_code: str, modelo, cache, cancelado,
     if cache is not None:
         for t in dict.fromkeys(textos):
             guardado = cache.get(t, lang_code, CACHE_PROVIDER)
-            # Lo que se guardó antes de mirar el idioma puede estar en otro: se vuelve a
-            # pedir, y la respuesta buena lo sustituye.
-            if guardado is not None and _en_su_idioma(t, guardado, lang_code):
+            # Lo que se guardó antes de mirar el idioma y el largo puede estar en otro, o
+            # resumido: se vuelve a pedir, y la respuesta buena lo sustituye.
+            if (guardado is not None and _en_su_idioma(t, guardado, lang_code)
+                    and _entera(t, guardado)):
                 hechos[t] = guardado
 
     faltan = [t for t in dict.fromkeys(textos) if t not in hechos]
@@ -311,10 +341,11 @@ def _refinar(textos: list[str], lang_code: str, modelo, cache, cancelado,
         salida, aviso = _llamar_modelo(lote, lang_code, modelo, cancelado, contexto)
         if aviso:
             return None, aviso
-        # Una línea que vuelve en otro idioma se queda con la traducción cruda, que es
-        # la regla de las marcas rotas: refinar nunca deja el documento peor. Y no se
-        # guarda, para que la próxima pasada lo intente otra vez.
-        buenas = {t: s for t, s in zip(lote, salida) if _en_su_idioma(t, s, lang_code)}
+        # Una línea que vuelve en otro idioma o resumida se queda con la traducción
+        # cruda, que es la regla de las marcas rotas: refinar nunca deja el documento
+        # peor. Y no se guarda, para que la próxima pasada lo intente otra vez.
+        buenas = {t: s for t, s in zip(lote, salida)
+                  if _en_su_idioma(t, s, lang_code) and _entera(t, s)}
         if cache is not None:
             cache.set_many(list(buenas.items()), lang_code, CACHE_PROVIDER)
         hechos.update({t: buenas.get(t, t) for t in lote})

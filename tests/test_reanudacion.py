@@ -143,6 +143,61 @@ def test_lo_que_vuelve_en_otro_idioma_no_se_guarda():
     assert cache.get("أكثر من 30 ديسيبل", "ar", refiner.CACHE_PROVIDER) is None
 
 
+# Un párrafo del árabe del módulo 20 y lo que devolvió flash-lite: la primera frase.
+CRUDO = ("يتمثل الهدف التشغيلي الأول في منع المشكلة من التفاقم. ويعني الاحتواء كسب الوقت "
+         "عن طريق عزل الأنظمة المتأثرة. ومع ذلك، لا يعني الاحتواء بالضرورة إيقاف تشغيل "
+         "البنية التحتية بالكامل، حيث إن عزل خدمة حاسمة قد يوقف المهاجم.")
+RESUMIDO = "يتمثل الهدف التشغيلي الأول في منع تفاقم المشكلة."
+
+
+class Resume(ModeloFalso):
+    def complete(self, prompt, system="", temperature=0.2):
+        self.llamadas += 1
+        return f"1. {RESUMIDO}"
+
+
+def test_una_linea_que_vuelve_resumida_se_queda_cruda_y_no_se_guarda():
+    """Estaba en su idioma y sin marcas rotas: pasó todo y se subió con siete de ocho
+    párrafos en su primera frase."""
+    cache = CacheFalsa()
+    salida, _ = refiner._refinar([CRUDO], "ar", Resume(), cache, None)
+    assert salida == [CRUDO]
+    assert cache.get(CRUDO, "ar", refiner.CACHE_PROVIDER) is None
+
+
+def test_lo_guardado_resumido_se_vuelve_a_pedir():
+    cache = CacheFalsa()
+    cache.set_many([(CRUDO, RESUMIDO)], "ar", refiner.CACHE_PROVIDER)
+    c = ModeloFalso()
+    salida, _ = refiner._refinar([CRUDO], "ar", c, cache, None)
+    assert salida == [f"refinado {CRUDO}"]
+    assert c.llamadas == 1
+
+
+FRASES = ["يتمثل الهدف التشغيلي الأول في منع المشكلة من التفاقم",
+          "ويعني الاحتواء كسب الوقت عن طريق عزل الأنظمة المتأثرة",
+          "ولا يعني الاحتواء بالضرورة إيقاف تشغيل البنية التحتية",
+          "ويجب التحقق من نجاح الحجب"]
+PARRAFO = ". ".join(FRASES) + "."
+
+
+def test_fundir_las_frases_y_soltar_la_ultima_es_un_recorte():
+    """Lo que hizo flash-lite con disimulo: una línea al 0,87 sin su última frase."""
+    recortado = "، ".join(FRASES[:-1]) + "."
+    assert refiner._MIN_LARGO < len(recortado) / len(PARRAFO) < refiner._SI_FUNDE
+    assert not refiner._entera(PARRAFO, recortado)
+
+
+def test_fundir_las_frases_sin_perder_nada_se_acepta():
+    assert refiner._entera(PARRAFO, "، ".join(FRASES) + ".")
+
+
+def test_una_linea_corta_puede_encoger():
+    """«الخطة الوطنية للأمن (ENS) على الصعيد الوطني الإسباني» → «… في إسبانيا» es
+    una buena edición del M19, y encoge al 0,70."""
+    assert refiner._entera("الخطة الوطنية للأمن", "خطة الأمن")
+
+
 def test_una_linea_repetida_se_paga_una_vez():
     c = ModeloFalso()
     # "Fuente: INCIBE" sale veinte veces en unos apuntes; mandarla veinte veces era
