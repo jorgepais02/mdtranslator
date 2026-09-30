@@ -716,6 +716,43 @@ basta, porque fundir frases con comas sin perder nada llega a encoger al 0,81 (m
 sobre las 744 líneas refinadas de M19 y M20): bajo dos tercios se rechaza siempre, y bajo
 el 0,9 solo si además vuelven menos frases. Las de menos de 40 caracteres no se miden.
 
+### Un test no puede delatar la respuesta por la forma
+Cada opción de un test se traduce **sola**, sin su pregunta ni sus hermanas, y cuatro
+opciones que en español son paralelas volvían con diferencias de forma que señalaban la
+correcta. Todas salieron en el test del módulo 20, y cada una se arregla donde nace; las
+tres primeras valen para cualquier documento (`ProtectedTranslator` y el refinador):
+
+- **La negrita** de la correcta la mandaba por otro camino: DeepL devolvió en árabe y en
+  chino los tres distractores como preguntas (`؟`, `？`) y la negrita sin signo, y el
+  refinador no la tocaba nunca, porque para él la línea entera era un solo `⟦0⟧`.
+  `sin_envoltorio()` quita el énfasis que envuelve la línea y lo repone después
+- **El punto final**: DeepL se lo pone a lo que le parece una frase y no a lo que le
+  parece un rótulo. En francés la correcta de una pregunta fue la única con punto.
+  `_sin_punto_de_mas()` quita el que el origen no tenía
+- **El espacio entre ideograma y latino**: el refinador lo metió en la correcta (`低于 5%`)
+  y no en las otras (`低于15%`). `espaciado_cjk()` deja una convención, sin espacio, en
+  chino y japonés; el coreano separa palabras con espacios y no se toca
+- **El refinado**: las opciones con letra (`_OPCION_RE`) no se refinan. El refinador las
+  pule una a una y rompe lo que DeepL había dado paralelo porque el origen lo es: en árabe
+  cambió `غيغابايت` por `جيجابايت` en dos distractores y no en la correcta, y a otra le
+  cambió el sentido («dos incidentes» pasó a «dos vías»)
+
+Lo que queda se arregla escribiendo: una opción tiene que entenderse sola y tener la forma
+de sus hermanas. En francés una correcta sin artículo entre tres con él
+(`Compromission de…` frente a `Le début de…`) se corrigió reescribiendo el español.
+
+**Mandar la pregunta como contexto de sus opciones se probó y se quitó.** Con cuatro
+preguntas sueltas parecía la solución: «Baja»/«Alta» salían «Inscription», «取消» o
+«إلغاء» y con la pregunta al lado salían bien. Sobre el test entero del M20 —una petición
+por pregunta, las cuatro opciones juntas— cambió entre 35 y 50 de las 80 opciones por
+idioma, y metió defectos peores que los que quitaba: en chino «Acceso a MITRE ATT&CK…»
+salió `无法访问…` —«**sin** acceso»: la pregunta era «¿Qué le falta…?» y DeepL le pasó la
+negación a la opción—, la correcta de otra salió `“Scheduled”（计划）或“周期性”`, con
+comillas e inglés que las otras no tenían, y en inglés dos opciones salieron «Between…» y
+dos «… to …» en la misma petición y con el mismo contexto. El contexto hace que DeepL lea
+la opción como **respuesta** a la pregunta, y la reescribe como tal. El del documento sí
+sirve, porque dice de qué va sin decir qué contestar.
+
 ### El formateo vuelve en su idioma y entero
 `generate_md` formatea el `.txt` con el mismo modelo y en el módulo 20 falló de las dos
 formas que el refinador ya conocía, un paso antes: cuatro de seis transcripciones

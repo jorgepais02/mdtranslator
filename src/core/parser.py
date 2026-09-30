@@ -19,6 +19,41 @@ TABLE_SEP_RE = re.compile(r"^\|?[\s|:\-]+\|[\s|:\-]*$")  # |---|---| rows
 LETRA_DE_LISTA = r"[A-Za-z]\)|[a-z]\."
 LETTER_RE   = re.compile(rf"^(\s*)({LETRA_DE_LISTA})\s+(.*\S)\s*$")
 
+# La negrita o cursiva que envuelve la línea entera. En un test la única opción en negrita
+# es la correcta, y con los asteriscos delante hacía un camino distinto al de las otras
+# tres: en el módulo 20, DeepL devolvió en árabe y en chino los tres distractores como
+# preguntas, con «؟» y «？», y la negrita sin signo; y el refinador no la tocaba nunca,
+# porque para él la línea entera era un solo ⟦0⟧. La negrita delataba la respuesta. Se
+# quita antes de traducir o refinar y se vuelve a poner después. Con el mismo signo dentro
+# («**A** y **B**») no envuelve nada, y la línea se queda como está.
+_ENVOLTORIO_RE = re.compile(r"^(\*{1,3}|_{1,3})(?=\S)([^*_\n]*[^*_\s])\1$")
+
+
+def sin_envoltorio(texto: str) -> tuple[str, str]:
+    """"**hola**" → ("hola", "**"). Sin énfasis que envuelva la línea → (texto, "")."""
+    m = _ENVOLTORIO_RE.match(texto)
+    return (m.group(2), m.group(1)) if m else (texto, "")
+
+
+# El espacio entre un ideograma y una letra latina. En el test chino del módulo 20 el
+# refinador lo metió en unas líneas y no en otras: «低于 5%» en la opción correcta y
+# «低于15%» en las otras tres, y lo mismo en otras dos preguntas, así que el espaciado
+# señalaba la respuesta. DeepL tampoco es constante («利用 RClone» frente a «MITRE严重性»).
+# Una sola convención para todo el documento, sin espacio, que es lo que DeepL escribe casi
+# siempre. Solo ideogramas y kana contra letras, cifras y «%»: el coreano separa palabras con
+# espacios, y el código inline no lo toca porque quien llama lo aplica con los ⟦n⟧ puestos.
+_CJK = r"[぀-ヿ㐀-䶿一-鿿豈-﫿]"
+_LATINO = r"[A-Za-z0-9%]"
+_ESPACIO_CJK_RE = re.compile(rf"(?<={_CJK}) +(?={_LATINO})|(?<={_LATINO}) +(?={_CJK})")
+
+
+def espaciado_cjk(texto: str, lang: str) -> str:
+    """Sin espacio entre ideogramas y texto latino en chino y japonés. API: str."""
+    if lang.lower().split("-")[0] not in ("zh", "ja"):
+        return texto
+    return _ESPACIO_CJK_RE.sub("", texto)
+
+
 LineInfo = tuple[str, str, str]
 
 # La parte de un tema repartido en varios apuntes, tal y como la escribe el nombre del

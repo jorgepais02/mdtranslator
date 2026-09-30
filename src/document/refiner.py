@@ -28,12 +28,12 @@ try:
     from ..ai.base import (MAX_ESPERA, MAX_INTENTOS, PISTAS_CUOTA, AIError,
                            cambio_de_modelo, espera_pedida)
     from ..ai.registry import get_model
-    from ..core.parser import LETRA_DE_LISTA
+    from ..core.parser import LETRA_DE_LISTA, espaciado_cjk, sin_envoltorio
 except ImportError:
     from ai.base import (MAX_ESPERA, MAX_INTENTOS, PISTAS_CUOTA, AIError,
                          cambio_de_modelo, espera_pedida)
     from ai.registry import get_model
-    from core.parser import LETRA_DE_LISTA
+    from core.parser import LETRA_DE_LISTA, espaciado_cjk, sin_envoltorio
 
 console = Console(stderr=True)
 
@@ -317,6 +317,14 @@ def _una_llamada(texts: list[str], lang: str, modelo,
 
 REFINABLE = {"paragraph", "list_item", "blockquote"}
 
+# Las opciones de una lista con letra —las de un test— no se refinan. Son hermanas y se
+# leen juntas, y el refinador las pule una a una: en el test árabe del módulo 20 cambió
+# «غيغابايت» por «جيجابايت» en dos distractores y no en la correcta, pasó tres opciones a
+# sustantivo y dejó la correcta con verbo, y a otra le cambió el sentido («حادثين», dos
+# incidentes, pasó a «مسارين», dos vías). DeepL las había dado paralelas porque el origen lo
+# es, y en un test cualquier diferencia de forma señala la respuesta: aquí pulir empeora.
+_OPCION_RE = re.compile(rf"^\s*(?:{LETRA_DE_LISTA})\s")
+
 
 def _refinar(textos: list[str], lang_code: str, modelo, cache, cancelado,
              contexto: str | None = None):
@@ -374,13 +382,15 @@ def refine_markdown(lines: list[str], lang_code: str, cache=None,
         return lines, str(e), None
 
     nodes = parse_nodes(lines)
-    idxs, texts, imaps = [], [], []
+    idxs, texts, imaps, marcas = [], [], [], []
     for i, n in enumerate(nodes):
-        if n.type in REFINABLE and n.text.strip():
-            clean, tok = extract_inline(n.text)
+        if n.type in REFINABLE and n.text.strip() and not _OPCION_RE.match(n.prefix):
+            interior, marca = sin_envoltorio(n.text)
+            clean, tok = extract_inline(interior)
             idxs.append(i)
             texts.append(clean)
             imaps.append(tok)
+            marcas.append(marca)
 
     try:
         refined, warn = _refinar(texts, lang_code, modelo, cache, cancelado, contexto)
@@ -395,7 +405,7 @@ def refine_markdown(lines: list[str], lang_code: str, cache=None,
 
     for pos, idx in enumerate(idxs):
         n = nodes[idx]
-        restored = restore_inline(refined[pos], imaps[pos])
+        restored = restore_inline(espaciado_cjk(refined[pos], lang_code), imaps[pos])
         # Las llaves son por línea, pero el modelo edita el lote entero: mueve una marca
         # a la línea de al lado, o la parte por dentro ("⟦0 lock⟧"). La vecina se queda
         # sin nada que restaurar y el símbolo llega al documento; la de origen pierde su
@@ -404,6 +414,8 @@ def refine_markdown(lines: list[str], lang_code: str, cache=None,
         # no, y refinar nunca puede dejar el documento peor de lo que estaba.
         if any(k not in refined[pos] for k in imaps[pos]) or "⟦" in restored or "⟧" in restored:
             continue
+        if marcas[pos]:
+            restored = f"{marcas[pos]}{restored.strip()}{marcas[pos]}"
         nodes[idx] = Node(n.type, n.prefix + restored, restored, n.prefix)
 
     return [n.raw for n in nodes], None, cambio_de_modelo(modelo)

@@ -74,6 +74,54 @@ def test_el_contenido_protegido_sobrevive_a_la_traduccion(fragmento):
     assert fragmento in salida[0]
 
 
+def test_la_negrita_de_la_linea_entera_no_llega_al_traductor():
+    """La opción correcta de un test es la única en negrita, y con los asteriscos DeepL
+    la devolvía distinta: en árabe, los tres distractores con «؟» y ella sin él."""
+    recibido = []
+
+    class Eco(BaseTranslator):
+        name = "eco"
+        def translate(self, texts, target_lang, source_lang=None):
+            recibido.extend(texts)
+            return [f" {t.upper()} " for t in texts]
+
+    salida = ProtectedTranslator(Eco()).translate(
+        ["**los hallazgos**", "**Respuesta: [C]{.notranslate}**", "**A** y **B**"], "EN")
+    assert recibido == ["los hallazgos", "Respuesta: ⟦0⟧", "**A** y **B**"]
+    assert salida == ["**LOS HALLAZGOS**", "**RESPUESTA: [C]{.notranslate}**", " **A** Y **B** "]
+
+
+@pytest.mark.parametrize("origen, traducido, esperado", [
+    ("Todos los sistemas se aíslan", "Tous les systèmes sont isolés.", "Tous les systèmes sont isolés"),
+    ("**Responde toda la organización**", "Toute l'organisation répond.", "**Toute l'organisation répond**"),
+    ("Menos del 5%", "少于5%。", "少于5%"),
+    ("Una frase entera.", "A whole sentence.", "A whole sentence."),
+    ("Qué hash tiene", "What is the hash?", "What is the hash?"),
+    ("Discos, memorias, etc", "Disks, memory, etc...", "Disks, memory, etc..."),
+])
+def test_la_traduccion_no_gana_un_punto_que_el_origen_no_tenia(origen, traducido, esperado):
+    """DeepL pone punto a lo que le parece una frase: en el test francés del módulo 20
+    la opción correcta de una pregunta fue la única que lo llevaba."""
+    class Fijo(BaseTranslator):
+        name = "fijo"
+        def translate(self, texts, target_lang, source_lang=None):
+            return [traducido for _ in texts]
+
+    assert ProtectedTranslator(Fijo()).translate([origen], "FR") == [esperado]
+
+
+def test_el_chino_sale_sin_espacio_junto_al_latino_salvo_en_el_codigo():
+    """DeepL escribe «利用 RClone» en una opción y «MITRE严重性» en la de al lado."""
+    class Fijo(BaseTranslator):
+        name = "fijo"
+        def translate(self, texts, target_lang, source_lang=None):
+            return ["利用 RClone 访问文件 ⟦0⟧ 意味着" for _ in texts]
+
+    origen = ["Con RClone, acceder a `ntds.dit` supone"]
+    assert ProtectedTranslator(Fijo()).translate(origen, "ZH") == ["利用RClone访问文件 `ntds.dit` 意味着"]
+    assert ProtectedTranslator(Fijo()).translate(origen, "EN") == ["利用 RClone 访问文件 `ntds.dit` 意味着"]
+
+
 def test_protected_detecta_que_el_proveedor_devuelve_de_menos():
     with pytest.raises(TranslationError, match="1 translations"):
         ProtectedTranslator(Roto(salida=["solo una"])).translate(["a", "b"], "EN")

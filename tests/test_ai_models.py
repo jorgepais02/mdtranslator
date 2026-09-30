@@ -412,6 +412,31 @@ def test_una_marca_que_vuelve_entera_si_se_refina(monkeypatch):
     assert out == ["ahora con _termino_ y mejor escrito."]
 
 
+def test_las_opciones_de_un_test_no_se_refinan(monkeypatch):
+    """El refinador pulia cada opcion por su cuenta: en el test arabe del modulo 20 cambio
+    «غيغابايت» por «جيجابايت» en dos distractores y no en la correcta. Las opciones se
+    quedan como las dio DeepL, la correcta y las otras; lo demas se sigue refinando, y una
+    linea entera en negrita tambien, que para el refinador era un solo ⟦0⟧."""
+    modelo = Fijo(respuesta="1. فقرة مصقولة")
+    monkeypatch.setattr(refiner, "get_model", lambda *a, **k: modelo)
+
+    lineas = ["A) الخيار الأول", "", "B) **الخيار الثاني**", "", "**فقرة خام**"]
+    out, aviso, _ = refiner.refine_markdown(lineas, "ar")
+    assert aviso is None
+    assert out == ["A) الخيار الأول", "", "B) **الخيار الثاني**", "", "**فقرة مصقولة**"]
+
+
+def test_el_refinado_no_mete_espacios_entre_chino_y_latino(monkeypatch):
+    """El refinador escribio «低于 5%» en la opcion correcta del test chino del modulo 20
+    y las otras tres seguian con el «低于15%» de DeepL: el espaciado la señalaba."""
+    modelo = Fijo(respuesta="1. 低于 15%\n2. 低于 5%")
+    monkeypatch.setattr(refiner, "get_model", lambda *a, **k: modelo)
+
+    out, aviso, _ = refiner.refine_markdown(["- 低于15%", "", "- **低于5%**"], "zh")
+    assert aviso is None
+    assert out == ["- 低于15%", "", "- **低于5%**"]
+
+
 # ------------------------------------------------------------ una linea en otro idioma
 # Con "editor for AR" y el contexto del documento —en español— pegado al SYSTEM, un lote
 # de lineas cortas de un documento arabe del modulo 19 volvio entero en español, y
@@ -422,11 +447,11 @@ def test_una_linea_que_vuelve_en_otro_idioma_se_queda_sin_refinar(monkeypatch):
                             "2. السلامة والأصالة")
     monkeypatch.setattr(refiner, "get_model", lambda *a, **k: mezcla)
 
-    lineas = ["A) النزاهة والتوافر والسرية", "", "B) النزاهة والأصالة"]
+    lineas = ["- النزاهة والتوافر والسرية", "", "- النزاهة والأصالة"]
     out, aviso, _ = refiner.refine_markdown(lineas, "ar")
 
     assert aviso is None
-    assert out == ["A) النزاهة والتوافر والسرية", "", "B) السلامة والأصالة"]
+    assert out == ["- النزاهة والتوافر والسرية", "", "- السلامة والأصالة"]
 
 
 def test_una_linea_sin_alfabeto_propio_no_tiene_nada_que_comprobar():

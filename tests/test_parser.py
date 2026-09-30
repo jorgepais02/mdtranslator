@@ -1,7 +1,7 @@
 """parse_markdown_lines / rebuild: la correspondencia 1:1 entre líneas y traducciones."""
 
-from core.parser import (contexto_del_documento, parse_markdown_lines,
-                         rebuild_markdown_from_translations)
+from core.parser import (contexto_del_documento, espaciado_cjk, parse_markdown_lines,
+                         rebuild_markdown_from_translations, sin_envoltorio)
 
 DOC = """# Título del tema
 
@@ -178,3 +178,40 @@ def test_una_inicial_con_punto_es_prosa_y_no_una_lista():
 def test_las_opciones_no_son_contexto():
     md = "# Test\n\nRepaso de las jaulas de Faraday.\n\nA) Superior a 60 dB\n"
     assert contexto_del_documento(md) == "Test Repaso de las jaulas de Faraday."
+
+
+# ── énfasis que envuelve la línea ────────────────────────────────────────────
+# La opción correcta de un test es la única en negrita, y con los asteriscos hacía otro
+# camino: en el módulo 20 DeepL devolvió en árabe los tres distractores con «؟» y la
+# negrita sin él. La negrita delataba la respuesta.
+
+def test_la_negrita_que_envuelve_la_linea_se_separa():
+    assert sin_envoltorio("**Los hallazgos de la investigación**") == (
+        "Los hallazgos de la investigación", "**")
+    assert sin_envoltorio("**Respuesta: [C]{.notranslate}**") == ("Respuesta: [C]{.notranslate}", "**")
+    assert sin_envoltorio("***x***") == ("x", "***")
+    assert sin_envoltorio("_nota_") == ("nota", "_")
+
+
+def test_lo_que_no_envuelve_la_linea_entera_se_queda():
+    for texto in ["**A** y **B**", "Un **hallazgo** clave", "**mal cerrada*", "** con hueco**",
+                  "**`snake_case`**", "sin énfasis"]:
+        assert sin_envoltorio(texto) == (texto, "")
+
+
+def test_el_espaciado_entre_chino_y_latino_es_uno_solo():
+    """En el test chino del módulo 20 la opción correcta era la única con «低于 5%»: el
+    refinador metía el espacio en unas líneas y no en otras, y el espaciado la delataba."""
+    assert espaciado_cjk("低于 5%", "zh") == "低于5%"
+    assert espaciado_cjk("20% 至 40%", "zh") == "20%至40%"
+    assert espaciado_cjk("MITRE 严重性等级及 CMDB 中资产", "zh") == "MITRE严重性等级及CMDB中资产"
+    assert espaciado_cjk("一个看似 7 GB 的文件", "zh-hant") == "一个看似7 GB的文件"
+    assert espaciado_cjk("Python を使う", "ja") == "Pythonを使う"
+
+
+def test_el_espaciado_solo_cambia_en_chino_y_japones():
+    assert espaciado_cjk("低于 5%", "ko") == "低于 5%"
+    assert espaciado_cjk("Menos del 5 %", "fr") == "Menos del 5 %"
+    # los ⟦n⟧ del código inline y la puntuación de ancho completo se quedan como estaban
+    assert espaciado_cjk("访问文件 ⟦0⟧ 意味着", "zh") == "访问文件 ⟦0⟧ 意味着"
+    assert espaciado_cjk("数据采集， SIEM", "zh") == "数据采集， SIEM"

@@ -2,6 +2,11 @@ import inspect as _inspect
 import re as _re
 from abc import ABC, abstractmethod
 
+try:
+    from ..core.parser import espaciado_cjk, sin_envoltorio
+except ImportError:
+    from core.parser import espaciado_cjk, sin_envoltorio
+
 
 _INLINE_CODE_RE    = _re.compile(r'`[^`\n]+`')
 _FORMULA_BLOCK_RE  = _re.compile(r'\$\$[\s\S]+?\$\$')
@@ -31,6 +36,21 @@ def _restore_tokens(text: str, tokens: list[str]) -> str:
     for i, tok in enumerate(tokens):
         text = text.replace(f"⟦{i}⟧", tok)
     return text
+
+
+# El punto final que el origen no tenía. DeepL se lo pone a lo que le parece una frase y
+# no a lo que le parece un rótulo, línea a línea y sin criterio fijo: en el test francés
+# del módulo 20 la opción correcta de una pregunta fue la única con punto, y en la
+# siguiente fueron dos distractores. Cuatro opciones que en español acaban igual tienen
+# que acabar igual traducidas, o la puntuación dice cuál es la buena.
+_FIN_DEL_ORIGEN = (".", "。", "!", "?", "…", ":", ";")
+
+
+def _sin_punto_de_mas(origen: str, traducido: str) -> str:
+    fin = traducido.rstrip()
+    if origen.rstrip().endswith(_FIN_DEL_ORIGEN) or fin.endswith(("..", "…")):
+        return traducido
+    return fin[:-1] if fin.endswith((".", "。")) else traducido
 
 
 def chunk_texts(texts: list[str], max_items: int, max_chars: int) -> list[list[str]]:
@@ -230,10 +250,13 @@ class ProtectedTranslator(BaseTranslator):
                   context: str | None = None) -> list[str]:
         protected_texts = []
         all_tokens: list[list[str]] = []
+        marcas: list[str] = []
         for text in texts:
-            protected, tokens = _protect_tokens(text)
+            interior, marca = sin_envoltorio(text)
+            protected, tokens = _protect_tokens(interior)
             protected_texts.append(protected)
             all_tokens.append(tokens)
+            marcas.append(marca)
         translated = call_translate(self.translator, protected_texts, target_lang,
                                     source_lang, context)
         if len(translated) != len(protected_texts):
@@ -241,4 +264,6 @@ class ProtectedTranslator(BaseTranslator):
                 f"{self.name} returned {len(translated)} translations "
                 f"for {len(protected_texts)} inputs"
             )
-        return [_restore_tokens(t, tokens) for t, tokens in zip(translated, all_tokens)]
+        salida = [_sin_punto_de_mas(o, _restore_tokens(espaciado_cjk(t, target_lang), tokens))
+                  for o, t, tokens in zip(protected_texts, translated, all_tokens)]
+        return [f"{m}{s.strip()}{m}" if m else s for s, m in zip(salida, marcas)]
