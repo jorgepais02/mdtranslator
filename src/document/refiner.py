@@ -13,6 +13,7 @@ Nodos intocables:  heading, code_block, table, hr, blank, frontmatter
 API:
     refine_markdown(lines, lang_code, cache=None, cancelado=None)
         -> (lineas, aviso, cambio_de_modelo)
+    fuera_de_su_alfabeto(parsed, lineas, lang_code) -> [(nº de línea, línea)]
 CLI:
     python -m src.document.refiner input.md lang_code
 """
@@ -176,6 +177,48 @@ def _en_su_idioma(original: str, refinado: str, lang_code: str) -> bool:
         return True
     alfabeto = re.compile(f"[{letras}]")
     return not alfabeto.search(original) or bool(alfabeto.search(refinado))
+
+
+# Lo mismo sobre el documento terminado, que es lo que se sube. _en_su_idioma solo ve lo
+# que pasa por el refinador, y no todo pasa: sin cuota no se refina nada y la traducción
+# cruda también puede volver sin traducir. En los tests de M19 y M20 esta revisión se
+# hizo a mano, con un script, antes de subir. Solo se mira lo que en el origen era
+# prosa —una palabra en minúscula de cuatro letras o más—, porque «SHA-256», «IEEE 299»
+# o «MITRE ATT&CK» se quedan igual en cualquier idioma. Contando también las palabras con
+# mayúscula, sobre los 38 documentos AR/ZH de M19 y M20 saltaban 15 líneas y las 15 eran
+# nombres de producto (Magnet AXIOM, Mandiant): un aviso que sale en cada ejecución se
+# deja de leer. Las líneas cortas con mayúscula ya las vigila _en_su_idioma, que es
+# donde falló en M19. Lo protegido tampoco cuenta. Y en
+# chino, japonés y coreano la puntuación de ancho completo también es su escritura: el
+# título «Mayday, mayday» se queda en inglés y vuelve como «Mayday，Mayday», con la coma
+# ya cambiada, mientras que una línea que nadie ha traducido conserva la suya.
+_PALABRA     = re.compile(r"[^\W\d_]{4,}")
+_NO_ES_PROSA = re.compile(r"`[^`\n]+`|https?://\S+|\[[^\]\n]*\]\{[^}\n]*\}|\$[^$\n]+\$")
+_ANCHO_COMPLETO = "\u3000-\u303f\uff01-\uff60"
+_PUNTUACION_CJK = {"zh": _ANCHO_COMPLETO, "ja": _ANCHO_COMPLETO, "ko": _ANCHO_COMPLETO}
+
+
+def fuera_de_su_alfabeto(parsed: list, lineas: list[str],
+                         lang_code: str) -> list[tuple[int, str]]:
+    """Las líneas que deberían estar en el alfabeto del idioma y no lo están. API: list.
+
+    `parsed` es el origen (parse_markdown_lines) y `lineas` el documento traducido, una
+    por nodo. Devuelve (nº de línea, línea). Un idioma sin alfabeto propio en _ESCRITURA,
+    o un documento que no case línea a línea con su origen, no tiene nada que comprobar.
+    """
+    letras = _escritura(lang_code)[1]
+    if not letras or len(parsed) != len(lineas):
+        return []
+    corto    = lang_code.split("-")[0].lower()
+    alfabeto = re.compile(f"[{letras}{_PUNTUACION_CJK.get(corto, '')}]")
+    fuera: list[tuple[int, str]] = []
+    for n, ((kind, _prefijo, origen), linea) in enumerate(zip(parsed, lineas), 1):
+        if not origen or kind == "code_block":
+            continue
+        prosa = _NO_ES_PROSA.sub(" ", origen)
+        if any(p.islower() for p in _PALABRA.findall(prosa)) and not alfabeto.search(linea):
+            fuera.append((n, linea.strip()))
+    return fuera
 
 
 # Tampoco puede volver resumida. gemini-3.5-flash-lite, refinando el módulo 20, dejó

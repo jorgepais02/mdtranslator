@@ -19,7 +19,8 @@ from .styles import (console, elide as _elide, status_style as _status_style,
 from translators import get_translator
 from translators.base import call_translate
 from translators.cache import TranslationCache
-from document.refiner import AVISO_SIN_CUOTA, es_aviso_de_cuota, refine_markdown
+from document.refiner import (AVISO_SIN_CUOTA, es_aviso_de_cuota, fuera_de_su_alfabeto,
+                              refine_markdown)
 from core.parser import (conserva_la_parte, contexto_del_documento, parse_markdown_lines,
                          quita_la_parte, rebuild_markdown_from_translations)
 from core.docgen import generate_docx_document, convert_many_to_pdf
@@ -690,6 +691,7 @@ def run_pipeline(config: dict) -> list[dict]:
             ok      = True
             refined = True
             cambio  = None          # con que modelo se refino, si no fue el preferido
+            fuera   = []            # lineas que no estan en el alfabeto del idioma
             url     = None
             warning = doc.warning if is_source else None
 
@@ -770,6 +772,11 @@ def run_pipeline(config: dict) -> list[dict]:
                 elif not out_file.exists() or out_file.read_text(encoding="utf-8") != new_content:
                     out_file.write_text(new_content, encoding="utf-8")
 
+                # Sobre lo que se va a subir, no sobre la traducción cruda: puede venir de
+                # disco (_conserva_lo_refinado) y el refinador puede haber arreglado líneas.
+                if not is_source:
+                    fuera = fuera_de_su_alfabeto(doc.parsed, new_content.splitlines(), lang)
+
                 if not docx_file.exists() or out_file.stat().st_mtime > docx_file.stat().st_mtime:
                     docx_file = generate_docx_document(out_file, short)
 
@@ -841,6 +848,10 @@ def run_pipeline(config: dict) -> list[dict]:
                 # Solo cuando contesto un modelo distinto del preferido: si salio del
                 # primero de la lista, decirlo seria ruido en todas las filas.
                 "refine_model": cambio,
+                # Lo que en M19 y M20 se revisó a mano antes de subir: líneas que tendrían
+                # que haber cambiado de alfabeto y no lo hicieron. Se avisa y no se para,
+                # porque la línea puede ser un nombre que se queda como está.
+                "off_script": [{"line": n, "text": t} for n, t in fuera],
             }
 
         # ── Phase 2 — one flat pool across every file and language ────────────

@@ -244,6 +244,16 @@ def show_results(results: list[dict], total_time: float, version: str = VERSION,
     # ── Warnings ──────────────────────────────────────────────────────
     warnings = _agrupar([(r["lang"], r.get("source"), _short_warning(r["warning"]))
                          for r in results if r.get("warning")])
+    # Una fila por documento y no por línea, con la primera a la vista: dice dónde mirar
+    # sin copiar el documento debajo de la tabla. En --json van todas.
+    for r in results:
+        fuera = r.get("off_script")
+        if fuera:
+            n = len(fuera)
+            primera = fuera[0]
+            warnings.append((r["lang"], r.get("source"),
+                             f"{n} {'line' if n == 1 else 'lines'} not in its own script · "
+                             f"line {primera['line']}: {elide(primera['text'], 60)}"))
     # El modelo con el que se refinó es un aviso más, y solo aparece cuando no fue el
     # preferido: "salió, pero no del que pediste" es justo lo que hay que contar, y
     # amarillo ya significa "avisa", así que no hace falta ningún color nuevo.

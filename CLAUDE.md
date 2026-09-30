@@ -716,6 +716,18 @@ basta, porque fundir frases con comas sin perder nada llega a encoger al 0,81 (m
 sobre las 744 líneas refinadas de M19 y M20): bajo dos tercios se rechaza siempre, y bajo
 el 0,9 solo si además vuelven menos frases. Las de menos de 40 caracteres no se miden.
 
+Y el documento terminado pasa por la pregunta del idioma otra vez (`fuera_de_su_alfabeto`),
+porque `_en_su_idioma` solo ve lo que refina y la traducción cruda también puede volver sin
+traducir. Es lo que en los tests de M19 y M20 se revisaba a mano antes de subir. Mira lo
+que va a subirse —puede venir de disco— y deja un aviso por documento en **Warnings**
+(`3 lines not in its own script · line 34: …`, y en `--json` todas en `off_script`); no
+para nada, porque la línea puede ser un nombre que se queda como está. Solo cuenta lo que
+en el origen era prosa, una palabra en minúscula de cuatro letras o más: contando también
+las que empiezan por mayúscula, sobre los 38 documentos AR/ZH de M19 y M20 saltaban 15
+líneas y las 15 eran nombres de producto (Magnet AXIOM, Mandiant). Y en CJK la puntuación
+de ancho completo cuenta como su escritura: «Mayday, mayday» se queda en inglés y vuelve
+como `Mayday，Mayday`, y eran los dos únicos avisos que quedaban.
+
 ### Un test no puede delatar la respuesta por la forma
 Cada opción de un test se traduce **sola**, sin su pregunta ni sus hermanas, y cuatro
 opciones que en español son paralelas volvían con diferencias de forma que señalaban la

@@ -143,6 +143,51 @@ def test_lo_que_vuelve_en_otro_idioma_no_se_guarda():
     assert cache.get("أكثر من 30 ديسيبل", "ar", refiner.CACHE_PROVIDER) is None
 
 
+# ── el documento terminado, en su alfabeto ────────────────────────────────────
+# Lo que en M19 y M20 se revisó a mano, con un script, antes de subir el test.
+
+ORIGEN = ["# Test del módulo 20", "", "#### 1. ¿Qué norma define la atenuación?", "",
+          "A) IEEE 299", "", "B) Selección del origen de los datos", "",
+          "C) Del 20% al 40%", "", "D) Magnet AXIOM con `dd if=/dev/sda`"]
+
+
+def _parsed(lineas):
+    from core.parser import parse_markdown_lines
+    return parse_markdown_lines(lineas)
+
+
+def test_una_linea_que_se_quedo_en_espanol_se_avisa():
+    traducido = ["# اختبار الوحدة 20", "", "#### 1. ما المعيار الذي يحدد التوهين؟", "",
+                 "A) IEEE 299", "", "B) Selección del origen de los datos", "",
+                 "C) من 20% إلى 40%", "", "D) Magnet AXIOM مع `dd if=/dev/sda`"]
+    assert refiner.fuera_de_su_alfabeto(_parsed(ORIGEN), traducido, "ar") == \
+        [(7, "B) Selección del origen de los datos")]
+
+
+def test_siglas_cifras_nombres_y_codigo_se_quedan_como_estan():
+    # Ninguna de estas tiene una palabra en minúscula de cuatro letras fuera del código:
+    # que vuelvan sin una letra árabe es lo normal.
+    origen = ["IEEE 299", "SHA-256", "MITRE ATT&CK", "Del 20% al 40%", "Magnet AXIOM",
+              "`rclone copy`", "[Respuesta]{.notranslate}"]
+    assert refiner.fuera_de_su_alfabeto(_parsed(origen), origen, "ar") == []
+
+
+def test_la_coma_de_ancho_completo_es_escritura_china():
+    """«Mayday, mayday» se queda en inglés, pero el traductor ya ha pasado por ella."""
+    parsed = _parsed(["# Mayday, mayday"])
+    assert refiner.fuera_de_su_alfabeto(parsed, ["# Mayday，Mayday"], "zh") == []
+    assert refiner.fuera_de_su_alfabeto(parsed, ["# Mayday, mayday"], "zh") == \
+        [(1, "# Mayday, mayday")]
+
+
+def test_sin_alfabeto_propio_o_sin_casar_no_hay_nada_que_mirar():
+    parsed = _parsed(["Selección del origen"])
+    assert refiner.fuera_de_su_alfabeto(parsed, ["Selección del origen"], "fr") == []
+    assert refiner.fuera_de_su_alfabeto(parsed, ["uno", "dos"], "ar") == []
+    assert refiner.fuera_de_su_alfabeto(parsed, ["Selección del origen"], "zh-hans") == \
+        [(1, "Selección del origen")]
+
+
 # Un párrafo del árabe del módulo 20 y lo que devolvió flash-lite: la primera frase.
 CRUDO = ("يتمثل الهدف التشغيلي الأول في منع المشكلة من التفاقم. ويعني الاحتواء كسب الوقت "
          "عن طريق عزل الأنظمة المتأثرة. ومع ذلك، لا يعني الاحتواء بالضرورة إيقاف تشغيل "
@@ -284,6 +329,17 @@ def test_a_medias_no_es_un_fallo(monkeypatch):
     salida = _pintar(monkeypatch, [_fila("AR", incomplete=True)])
     assert "Completed with errors" not in salida
     assert "Unfinished" in salida
+
+
+def test_las_lineas_fuera_de_su_alfabeto_son_un_aviso_por_documento(monkeypatch):
+    fuera = [{"line": 7, "text": "B) Selección del origen de los datos"},
+             {"line": 9, "text": "C) Del 20% al 40% de las alertas"}]
+    salida = _pintar(monkeypatch, [_fila("EN"), _fila("AR", off_script=fuera)])
+    assert "Warnings" in salida
+    assert "2 lines not in its own script" in salida
+    assert "line 7: B) Selección del origen" in salida
+    assert "line 9" not in salida                 # la primera basta para saber dónde mirar
+    assert "Completed with errors" not in salida  # avisa, no falla
 
 
 def test_el_json_lleva_el_comando(capsys):
