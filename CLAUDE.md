@@ -709,6 +709,21 @@ pasada lo pida otra vez, y lo que ya estaba cacheado pasa por la misma comprobac
 leerlo: si no, el español guardado antes del arreglo seguiría saliendo en 0,0s en cada
 relanzamiento.
 
+### El formateo vuelve en su idioma y entero
+`generate_md` formatea el `.txt` con el mismo modelo y en el módulo 20 falló de las dos
+formas que el refinador ya conocía, un paso antes: cuatro de seis transcripciones
+volvieron **en inglés** —con `lang="es"` el prompt no nombraba el idioma, y todo lo que el
+modelo veía aparte de la transcripción estaba en inglés— y tres volvieron **resumidas**:
+«Dr. Ryuk (II)» es una lista de herramientas por fase del ataque y llegó con 1 de sus 9.
+Aquí pesa más, porque el `.md` se guarda al lado del `.txt` y gana sobre él en adelante.
+
+El prompt nombra el idioma (langdetect ≥ 0,90) y se comprueba el de vuelta. El resumen se
+mide por **términos**, no por largo —siglas, mayúscula interior, cifra o extensión:
+`PsExec`, `T1204`, `ntds.dit`—: hay apuntes buenos del M19 al 59 % del largo, pero ninguno
+baja del 79 % de términos, y los tres malos se quedaron entre el 11 y el 40 %. Dos
+intentos: si los dos vuelven en otro idioma, `AIError` y no se guarda el `.md`; si vuelven
+resumidos, se queda el que conserve más, con un aviso.
+
 ### Limpieza en modo solo-Drive
 Cuando la salida es solo Drive, los ficheros locales son scratch. Se borran **solo los que
 esta ejecución ha creado** (`scratch`), y las carpetas con `rmdir()`, que falla si no están
@@ -786,5 +801,5 @@ los del anterior en cuanto se anidaran dos.
 test corresponde a un fallo real observado en producción, no a cobertura por cobertura.
 Ejecutar con `pytest -q`. Si añades lógica de troceado, numeración, detección de idioma,
 resolución de rutas, reanudación (cuota, reintentos, caché), fallback de modelos
-(`tests/test_ai_models.py`) o alta de claves (`tests/test_key_setup.py`), el test va
-con ella.
+(`tests/test_ai_models.py`), formateo de `.txt` (`tests/test_formateo.py`) o alta de
+claves (`tests/test_key_setup.py`), el test va con ella.
