@@ -858,6 +858,7 @@ suyo.
 - Un perfil de usuario privado por llamada a LibreOffice (`-env:UserInstallation`): con el
   perfil compartido, dos conversiones a la vez devuelven 0 sin escribir ningún PDF
 - Verificar los cambios ejecutándolos, no leyéndolos
+- Si piden «revisar todo» un módulo, leer cada documento traducido (EN, FR, AR, ZH), no solo el test ni búsquedas de texto, antes de decir que está revisado
 
 **NUNCA:**
 - Modificar archivos en `translated/` manualmente; los regenera el pipeline
