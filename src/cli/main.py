@@ -18,8 +18,8 @@ from .results import show_results
 from .errors import CLIError
 from .styles import LANGUAGES
 from .styles import bloque, console, clear_screen, RED, VERSION, YELLOW
-from .folder_picker import (configured_folder, pick_drive_folder, run_set_folder,
-                            save_folder_id)
+from .folder_picker import (configured_folder, create_folder_next_to, next_folder_name,
+                            pick_drive_folder, run_set_folder, save_folder_id)
 from .key_setup import run_add_key
 from core.sources import ALL_FILES, collect_sources, list_source_folders
 from core.config import DRIVE_FOLDER_ID
@@ -46,6 +46,11 @@ def parse_args():
                         help="source language of the documents (skips auto-detection)")
     parser.add_argument("--set-folder", action="store_true",
                         help="pick the Google Drive destination folder and save it")
+    # Lo mismo que "Create a new folder…" del wizard, para quien no tiene terminal: con
+    # nargs="?", "--new-folder" propone el nombre y "--new-folder M30" lo dice.
+    parser.add_argument("--new-folder", nargs="?", const="", default=None, metavar="NAME",
+                        help="create the Drive folder next to the saved one (default name: "
+                             "the next in the series, M20 -> M21) and use it")
     # nargs="?" para que valga tanto "--add-key" (pregunta de quien) como
     # "--add-key groq". El default es None y el const "", asi que "se ha pedido" y
     # "se ha dicho de quien" son dos preguntas distintas.
@@ -202,6 +207,34 @@ def _ensure_drive_folder(config, interactive: bool) -> None:
     config["drive_folder_id"], config["drive_folder_name"] = elegida
 
 
+def _apply_new_folder(config, nombre: str, manager=None) -> None:
+    """--new-folder: crea la carpeta del modulo nuevo y la pone como destino.
+
+    Es el "Create a new folder…" del wizard para quien no puede contestar preguntas.
+    Como alli, no se escribe config.json ahora sino al arrancar la fase 3
+    (_remember_drive_folder). Y como crear reutiliza una carpeta homonima, repetir el
+    comando no deja dos hermanas.
+    """
+    if "Google Drive" not in config["output"]:
+        print("error: --new-folder needs --output drive or both", file=sys.stderr)
+        sys.exit(2)
+    actual_id, actual_nombre = configured_folder()
+    if not actual_id:
+        print("error: --new-folder creates the folder next to the saved one and there is "
+              "none — run with --set-folder first", file=sys.stderr)
+        sys.exit(2)
+    nombre = nombre.strip() or next_folder_name(actual_nombre) or ""
+    if not nombre:
+        print(f"error: cannot guess the next name from {actual_nombre or 'the saved folder'!r}"
+              " — pass it: --new-folder NAME", file=sys.stderr)
+        sys.exit(2)
+    creada = create_folder_next_to(nombre, actual_id, manager=manager)
+    if not creada:
+        sys.exit(2)
+    config["drive_folder_id"], config["drive_folder_name"] = creada
+    print(f"Drive folder: {creada[1]}", file=sys.stderr)
+
+
 def _remember_drive_folder(config) -> None:
     """Guarda la carpeta de esta ejecucion como la de la proxima.
 
@@ -235,6 +268,8 @@ def _run(args):
         _abort()
 
     config["provider"] = _PROVIDER_MAP.get(config["provider"], config["provider"])
+    if args.new_folder is not None:
+        _apply_new_folder(config, args.new_folder)
     _ensure_drive_folder(config, interactive=not (args.json or args.yes))
 
     # Stage 2 — Confirmation

@@ -83,6 +83,8 @@ pip install -r requirements.txt
 ./run_pipeline.sh                          # CLI interactivo
 ./run_pipeline.sh sources/apuntes.md       # con archivo pre-seleccionado
 ./run_pipeline.sh --set-folder             # elegir carpeta de Drive (se guarda en config.json)
+./run_pipeline.sh sources/modulo-22 --all --lang EN FR --output drive -y --new-folder
+                                           # sin terminal: crea M22 junto a M21 y la usa
 ./run_pipeline.sh --add-key                # dar de alta una clave de API (se guarda en .env)
 ./run_pipeline.sh --add-key groq           # …esa, sin preguntar de quién
 
@@ -104,7 +106,7 @@ pytest -q
 ```
 
 Flags de `main.py`: `file`, `--lang`, `--provider {azure,deepl,auto}`, `--output {local,drive,both}`,
-`--all`, `--no-format`, `--source-lang`, `--set-folder`, `--add-key [PROVIDER]`, `--yes/-y`, `--json`,
+`--all`, `--no-format`, `--source-lang`, `--set-folder`, `--new-folder [NOMBRE]`, `--add-key [PROVIDER]`, `--yes/-y`, `--json`,
 `--version`.
 
 ---
@@ -386,6 +388,26 @@ cambiaba por `ج`. Por lo mismo, la letra de una lista `A)`/`b)`/`c.` es prefijo
 estructural en `parser.py` y en el refiner, igual que `1.`: traducida salía `أ)` o `A）`
 y Pandoc dejaba de ver la lista.
 
+### Un proveedor sin cuota se deja en pausa para toda la ejecución
+Pasó en el módulo 21: DeepL sin cupo mensual (500.000 de 500.000), Azure con un 429001 de
+**ritmo** y Gemini sin sus 20 diarias, y dos documentos se quedaron sin traducir. Eran tres
+fallos distintos y el pipeline los trataba igual:
+
+- Azure reintentaba a 1+2+4 s, menos de lo que tarda en reponerse, y cuatro hilos a la vez,
+  cada uno por su cuenta. Ahora espera 5/10/20/40 s o el `Retry-After` (si es un número;
+  puede ser una fecha) y deja una **pausa compartida** (`base.pausar`): los demás hilos la
+  respetan en vez de chocar a la vez.
+- DeepL con la cuota mensual agotada (`456`) lanza `TranslationQuotaError` **sin**
+  `retry_after`: `FallbackTranslator` lo da por fuera 24 h (`SIN_FECHA`), así que ninguna
+  llamada más le pregunta. Antes cada llamada de cada hilo empezaba por DeepL.
+- Si no queda ningún proveedor pero alguno vuelve en menos de `MAX_ESPERA` (90 s), el
+  fallback **espera y reintenta** (3 rondas, con un poco de azar para que los hilos no
+  salgan juntos) en vez de dar la tarea por fallida. Lo que vuelve más tarde (el
+  `retryDelay` diario de Gemini son ~25 min) falla sin dormir.
+
+`TranslationQuotaError` es un `TranslationError`, así que quien captura el segundo no cambia.
+El mensaje final sigue llevando «quota» y «429», que es lo que lee `main._retry_provider`.
+
 ### Compatibilidad de la interfaz `translate()`
 `BaseTranslator.translate` acepta un tercer argumento **opcional** `source_lang`. Nada lo
 llama directamente: todo pasa por `call_translate(translator, texts, target, source)`, que
@@ -537,10 +559,11 @@ una fila más de **Warnings** en `DIM` (`AR · refined with gemini-3.5-flash —
 had no quota`); en `--json` viaja el dict `{used, instead_of, reason}`. Sin color nuevo:
 amarillo ya significa "avisa".
 
-El traductor Gemini (`translators/gemini.py`) toma el id del modelo del registro
-(`modelo_de("gemini")`, que respeta el orden configurado) pero **no** hereda el fallback: en
-el menú es el proveedor "Gemini (Google AI)", la traducción ya tiene su propio fallback por
-proveedor, y cambiarle el motor por dentro sería traducir con otra cosa sin decirlo.
+El traductor Gemini (`translators/gemini.py`) toma los ids de `modelos_de("gemini")`, que
+respeta el orden configurado, y cuando uno se queda sin cuota pasa al siguiente **de la
+misma cuenta** —y solo por cuota—. Sigue siendo Gemini: no cae en Groq ni Cerebras, que no
+traducen. Antes no tenía ni eso, y el 9-10-2026 se quedó sin sus 20 diarias en
+`gemini-2.5-flash` con otros dos modelos libres.
 
 ### La carpeta de Drive se elige en la ejecución, no en el config
 Un módulo nuevo es una carpeta nueva, y antes eso significaba salir del programa: ir a
@@ -564,6 +587,11 @@ Quién escribe qué, que es lo que mantiene al wizard sin lógica de negocio:
   el trabajo con Drive lo hace `folder_picker`
 - `pipeline.py` prefiere `config["drive_folder_id"]` sobre `DRIVE_FOLDER_ID`: la carpeta
   de esta ejecución puede haberse creado un segundo antes
+- `--new-folder [NOMBRE]` es lo mismo que «Create a new folder…» para quien no tiene
+  terminal (`main._apply_new_folder`): sin nombre propone el siguiente de la serie, y como
+  crear reutiliza una carpeta homónima, repetirlo con el mismo nombre no deja dos
+  hermanas. **Sin nombre, relanzar crea la siguiente otra vez** (M22 tras M21): para
+  reintentar un módulo se relanza sin el flag, que ya recuerda la carpeta
 - `main._remember_drive_folder` guarda la elección en `config.json` **al arrancar la
   fase 3**, no al elegirla: cancelar en la confirmación no tiene que dejar cambiada la
   carpeta de la próxima vez
@@ -865,5 +893,5 @@ suyo.
 test corresponde a un fallo real observado en producción, no a cobertura por cobertura.
 Ejecutar con `pytest -q`. Si añades lógica de troceado, numeración, detección de idioma,
 resolución de rutas, reanudación (cuota, reintentos, caché), fallback de modelos
-(`tests/test_ai_models.py`), formateo de `.txt` (`tests/test_formateo.py`) o alta de
+(`tests/test_ai_models.py`), fallback de traducción (`tests/test_fallback_traduccion.py`), formateo de `.txt` (`tests/test_formateo.py`) o alta de
 claves (`tests/test_key_setup.py`), el test va con ella.
