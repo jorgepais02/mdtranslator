@@ -21,6 +21,17 @@ _URL_RE            = _re.compile(r'https?://\S+')
 # no apuntaba a ninguna opción. Pandoc pinta el span como texto normal.
 _NO_TRADUCIR_RE    = _re.compile(r'\[[^\]\n]*\]\{[^}\n]*\.notranslate\b[^}\n]*\}')
 
+# Las siglas que el texto explica entre paréntesis: "Agencia Española de Protección de Datos
+# (AEPD)". Con la sigla suelta el traductor la lee como palabra y la cambia —el árabe
+# tradujo AEPD por «la Policía»— y quien lee ya tiene el nombre largo al lado. Solo las
+# de dos o más mayúsculas: "(Plan)" o "(Madrid)" son palabras que sí hay que traducir.
+# Quedan fuera los numerales romanos —"(II)" es la parte de una serie— y las españolas
+# que en inglés son otras: RGPD→GDPR, IA→AI, UE→EU, ONU→UN, IVA→VAT. La lista es corta
+# a propósito: se amplía cuando aparezca otra, no se adivina.
+_SIGLA_ENTRE_PARENTESIS_RE = _re.compile(
+    r'\((?!(?:RGPD|IA|UE|ONU|IVA|PYME|LOPD|EEUU|OTAN|[IVXLC]+)\))'
+    r'[A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\)')
+
 
 def _protect_tokens(text: str) -> tuple[str, list[str]]:
     tokens: list[str] = []
@@ -32,6 +43,9 @@ def _protect_tokens(text: str) -> tuple[str, list[str]]:
     out = _FORMULA_INLINE_RE.sub(_replace, out)
     out = _INLINE_CODE_RE.sub(_replace, out)
     out = _URL_RE.sub(_replace, out)
+    # Última, o su marcador quedaría dentro del token de un código, fórmula o URL y la
+    # restauración no lo deshace.
+    out = _SIGLA_ENTRE_PARENTESIS_RE.sub(_replace, out)
     return out, tokens
 
 
