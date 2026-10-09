@@ -590,8 +590,9 @@ Quién escribe qué, que es lo que mantiene al wizard sin lógica de negocio:
 - `--new-folder [NOMBRE]` es lo mismo que «Create a new folder…» para quien no tiene
   terminal (`main._apply_new_folder`): sin nombre propone el siguiente de la serie, y como
   crear reutiliza una carpeta homónima, repetirlo con el mismo nombre no deja dos
-  hermanas. **Sin nombre, relanzar crea la siguiente otra vez** (M22 tras M21): para
-  reintentar un módulo se relanza sin el flag, que ya recuerda la carpeta
+  hermanas. Se guarda también `drive.folder_lote` (el lote de `sources/` para el que es la
+  carpeta): sin nombre y con el mismo lote, relanzar **reutiliza** la carpeta en vez de crear
+  la siguiente (M22 tras M21). Con nombre explícito crea siempre
 - `main._remember_drive_folder` guarda la elección en `config.json` **al arrancar la
   fase 3**, no al elegirla: cancelar en la confirmación no tiene que dejar cambiada la
   carpeta de la próxima vez

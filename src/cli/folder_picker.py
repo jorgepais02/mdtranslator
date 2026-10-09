@@ -7,7 +7,8 @@ API:
     create_folder_next_to(name, sibling_of, manager=None) -> tuple[str, str] | None
     configured_folder() -> tuple[str, str]
     next_folder_name(name) -> str | None
-    save_folder_id(folder_id, folder_name=None) -> Path
+    save_folder_id(folder_id, folder_name=None, lote=None) -> Path
+    configured_lote() -> str
     extract_folder_id(text) -> str | None
 
 CLI:
@@ -102,7 +103,13 @@ def configured_folder() -> tuple[str, str]:
     return (drive.get("folder_id") or "").strip(), (drive.get("folder_name") or "").strip()
 
 
-def save_folder_id(folder_id: str, folder_name: str | None = None) -> Path:
+def configured_lote() -> str:
+    """El lote de sources/ para el que se guardó la carpeta, o "". API: str."""
+    return ((_leer_cfg().get("drive") or {}).get("folder_lote") or "").strip()
+
+
+def save_folder_id(folder_id: str, folder_name: str | None = None,
+                   lote: str | None = None) -> Path:
     """Escribe drive.folder_id, y su nombre, en config.json conservando el resto.
 
     El nombre es un rótulo, no una referencia: si la carpeta se renombra en Drive el id
@@ -110,9 +117,15 @@ def save_folder_id(folder_id: str, folder_name: str | None = None) -> Path:
     """
     cfg = _leer_cfg()
     drive = cfg.setdefault("drive", {})
+    if drive.get("folder_id") != folder_id:
+        # Otra carpeta ya no es la del lote anterior: dejarlo haria que --new-folder
+        # reutilizase una carpeta ajena.
+        drive.pop("folder_lote", None)
     drive["folder_id"] = folder_id
     if folder_name:
         drive["folder_name"] = folder_name
+    if lote:
+        drive["folder_lote"] = lote
     path = PROJECT_ROOT / "config.json"
     path.write_text(json.dumps(cfg, indent=4, ensure_ascii=False) + "\n", encoding="utf-8")
     return path

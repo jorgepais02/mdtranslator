@@ -18,10 +18,11 @@ from .results import show_results
 from .errors import CLIError
 from .styles import LANGUAGES
 from .styles import bloque, console, clear_screen, RED, VERSION, YELLOW
-from .folder_picker import (configured_folder, create_folder_next_to, next_folder_name,
-                            pick_drive_folder, run_set_folder, save_folder_id)
+from .folder_picker import (configured_folder, configured_lote, create_folder_next_to,
+                            next_folder_name, pick_drive_folder, run_set_folder,
+                            save_folder_id)
 from .key_setup import run_add_key
-from core.sources import ALL_FILES, collect_sources, list_source_folders
+from core.sources import ALL_FILES, collect_sources, list_source_folders, lote_de
 from core.config import DRIVE_FOLDER_ID
 from translators.registry import AVAILABLE_TRANSLATORS, get_available_translators
 
@@ -207,6 +208,12 @@ def _ensure_drive_folder(config, interactive: bool) -> None:
     config["drive_folder_id"], config["drive_folder_name"] = elegida
 
 
+def _lote_de_config(config) -> str:
+    """El lote de sources/ que se va a procesar, o "" si van sueltos o de varios lotes."""
+    lotes = {lote_de(p) for p in collect_sources(config["source"])}
+    return lotes.pop().name if len(lotes) == 1 and None not in lotes else ""
+
+
 def _apply_new_folder(config, nombre: str, manager=None) -> None:
     """--new-folder: crea la carpeta del modulo nuevo y la pone como destino.
 
@@ -223,6 +230,13 @@ def _apply_new_folder(config, nombre: str, manager=None) -> None:
         print("error: --new-folder creates the folder next to the saved one and there is "
               "none — run with --set-folder first", file=sys.stderr)
         sys.exit(2)
+    # Sin nombre y para el mismo lote para el que se guardó la carpeta, relanzar es
+    # reintentar ese módulo: se reutiliza en vez de crear la siguiente.
+    lote = _lote_de_config(config)
+    if not nombre.strip() and lote and lote == configured_lote():
+        config["drive_folder_id"], config["drive_folder_name"] = actual_id, actual_nombre
+        print(f"Drive folder: {actual_nombre} (already created for {lote})", file=sys.stderr)
+        return
     nombre = nombre.strip() or next_folder_name(actual_nombre) or ""
     if not nombre:
         print(f"error: cannot guess the next name from {actual_nombre or 'the saved folder'!r}"
@@ -243,7 +257,7 @@ def _remember_drive_folder(config) -> None:
     """
     elegida = (config.get("drive_folder_id") or "").strip()
     if elegida and "Google Drive" in config["output"] and elegida != configured_folder()[0]:
-        save_folder_id(elegida, config.get("drive_folder_name"))
+        save_folder_id(elegida, config.get("drive_folder_name"), _lote_de_config(config))
 
 
 def _run(args):
