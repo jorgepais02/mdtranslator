@@ -573,17 +573,19 @@ def _prepare_docs(files: list[Path], format_raw: bool, forced_lang: str | None =
     return docs, failures
 
 
-def _avisar_si_no_alcanza_deepl(docs, languages, provider, parar: bool = False) -> None:
+def _avisar_si_no_alcanza_deepl(docs, languages, provider, aceptar_fallback: bool = True) -> None:
     """Dice antes de empezar si el cupo de DeepL no llega para lo que falta por traducir.
 
     Pasó en el módulo 21: DeepL se agotó a mitad de la ejecución y los documentos
     siguientes salieron de Azure, que no recibe el contexto, sin que nada lo anunciara.
     Cuenta solo los caracteres que la caché no tiene; la consulta de uso no gasta cupo.
-    Con `parar` y el proveedor en automático no sigue: lanza CLIError en vez de dejar que
-    el resto se traduzca en Azure sin contexto, que es lo que salió mal en el módulo 21.
+    Sin `aceptar_fallback` y con el proveedor en automático no avisa y sigue: lanza CLIError
+    en vez de dejar que el resto se traduzca en Azure sin contexto, que es lo que salió mal
+    en el módulo 21.
     """
     elegidos = [provider] if isinstance(provider, str) else list(provider or ["auto"])
-    if not {str(p).lower() for p in elegidos} & {"auto", "deepl"}:
+    nombres = {str(p).lower() for p in elegidos}
+    if not nombres & {"auto", "deepl"}:
         return
     try:
         deepl = DeepLTranslator()
@@ -608,14 +610,14 @@ def _avisar_si_no_alcanza_deepl(docs, languages, provider, parar: bool = False) 
     necesarios = sum(len(t) for textos in pendientes.values() for t in textos)
     quedan = tope - usados
     if necesarios > quedan:
-        if parar and "auto" in {str(p).lower() for p in elegidos}:
+        if not aceptar_fallback and "auto" in nombres:
             raise CLIError(
                 f"✗ DeepL has {quedan:,} of {tope:,} characters left this month and this "
                 f"run needs about {necesarios:,}. Stopped so the rest does not go to Azure "
                 f"with no document context. Wait for the monthly reset, or run again with "
                 f"--accept-fallback.")
         despues = ("The rest goes to the next provider, with no document context."
-                   if "auto" in {str(p).lower() for p in elegidos}
+                   if "auto" in nombres
                    else "With DeepL chosen by hand there is no fallback: the rest will fail.")
         console.print(f"[{YELLOW}]⚠ DeepL has {quedan:,} of {tope:,} characters left this "
                       f"month and this run needs about {necesarios:,}. {despues}[/{YELLOW}]")
@@ -656,7 +658,7 @@ def run_pipeline(config: dict) -> list[dict]:
         return all_results
 
     _avisar_si_no_alcanza_deepl(docs, languages, provider,
-                                parar=not config.get("accept_fallback"))
+                                aceptar_fallback=bool(config.get("accept_fallback")))
     translator = get_translator(provider)
     # La misma base que la caché de traducción: el refinamiento de Gemini es el trabajo
     # más caro y escaso de la ejecución, y sin guardarlo un lote que muere a la mitad

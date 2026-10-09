@@ -75,17 +75,18 @@ def parte_de(nombre: str) -> str:
     return f"({m.group(1)})" if m else ""
 
 
-_NUMERO_RE = re.compile(
-    r"\b(dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\s+"
-    r"(bloques|categorías|fases|pasos|apartados|partes|secciones|puntos|ejes|pilares|"
-    r"etapas|niveles|principios)\b", re.I)
 _NUMEROS = {"dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7,
             "ocho": 8, "nueve": 9, "diez": 10, "once": 11, "doce": 12}
+# Lo que se anuncia como una lista de N cosas: «seis bloques», «nueve categorías».
+_CUENTA_ANUNCIADA_RE = re.compile(
+    rf"\b({'|'.join(_NUMEROS)})\s+"
+    r"(bloques|categorías|fases|pasos|apartados|partes|secciones|puntos|ejes|pilares|"
+    r"etapas|niveles|principios)\b", re.I)
 _ITEM_RE = re.compile(r"(?:[-*+]|\d+[.)])\s+\S")
 
 
 def cuentas_que_no_cuadran(md: str) -> list[str]:
-    """Las veces que el texto dice «seis bloques» y la lista de debajo tiene otros tantos.
+    """Avisos de cada «seis bloques» cuya lista de debajo no tiene seis elementos.
 
     Las notas salen de una charla hablada y el ponente se equivoca al contar: en el módulo
     21 anunció seis bloques y dio cinco, y nueve categorías y dio ocho. Ese error se
@@ -97,7 +98,7 @@ def cuentas_que_no_cuadran(md: str) -> list[str]:
     lineas = md.splitlines()
     avisos = []
     for i, linea in enumerate(lineas):
-        m = _NUMERO_RE.search(linea)
+        m = _CUENTA_ANUNCIADA_RE.search(linea)
         if not m:
             continue
         j = i + 1

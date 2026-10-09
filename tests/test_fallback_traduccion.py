@@ -295,37 +295,56 @@ def test_el_aviso_de_cupo_entiende_una_lista_de_proveedores_y_un_plan_sin_tope(m
     assert dichos == []
 
 
-def test_sin_cupo_de_deepl_en_automatico_la_ejecucion_para_salvo_que_se_acepte(monkeypatch):
+class _DocCupo:
+    src_lang = "es"
+    texts = ["una frase de cierto largo"]
+
+
+class _CacheVacia:
+    def get(self, *a): return None
+
+
+class _DeepLConUso:
+    def __init__(self, uso): self._uso = uso
+    def usage(self): return self._uso
+
+
+@pytest.fixture
+def cupo(monkeypatch):
+    """pipeline con un DeepL de mentira; `uso` fija lo gastado y lo que dichos recoge."""
     from cli import pipeline
-    from cli.errors import CLIError
-
-    class Doc:
-        src_lang = "es"
-        texts = ["una frase de cierto largo"]
-
-    class Cache:
-        def get(self, *a): return None
-
-    class DL:
-        def __init__(self, uso): self._uso = uso
-        def usage(self): return self._uso
-
     dichos = []
-    monkeypatch.setattr(pipeline, "TranslationCache", Cache)
+    monkeypatch.setattr(pipeline, "TranslationCache", _CacheVacia)
     monkeypatch.setattr(pipeline.console, "print", lambda m, *a, **k: dichos.append(m))
-    monkeypatch.setattr(pipeline, "DeepLTranslator", lambda: DL((499_999, 500_000)))
 
+    def fijar(uso):
+        monkeypatch.setattr(pipeline, "DeepLTranslator", lambda: _DeepLConUso(uso))
+    return pipeline, fijar, dichos
+
+
+def test_sin_cupo_de_deepl_en_automatico_la_ejecucion_para(cupo):
+    from cli.errors import CLIError
+    pipeline, fijar, dichos = cupo
+    fijar((499_999, 500_000))
     with pytest.raises(CLIError, match="--accept-fallback"):
-        pipeline._avisar_si_no_alcanza_deepl([Doc()], ["EN"], "auto", parar=True)
+        pipeline._avisar_si_no_alcanza_deepl([_DocCupo()], ["EN"], "auto", aceptar_fallback=False)
     assert dichos == []
 
-    # Aceptado, a mano o con cupo de sobra: sigue como antes, avisando
-    pipeline._avisar_si_no_alcanza_deepl([Doc()], ["EN"], "auto", parar=False)
-    assert len(dichos) == 1
-    dichos.clear()
-    pipeline._avisar_si_no_alcanza_deepl([Doc()], ["EN"], "deepl", parar=True)
-    assert len(dichos) == 1
-    dichos.clear()
-    monkeypatch.setattr(pipeline, "DeepLTranslator", lambda: DL((0, 500_000)))
-    pipeline._avisar_si_no_alcanza_deepl([Doc()], ["EN"], "auto", parar=True)
-    assert dichos == []
+
+@pytest.mark.parametrize("uso, proveedor, aceptar, avisos", [
+    ((499_999, 500_000), "auto", True, 1),     # aceptado: sigue, avisando
+    ((499_999, 500_000), "deepl", False, 1),   # a mano no hay fallback: avisa, no para
+    ((0, 500_000), "auto", False, 0),          # cupo de sobra: ni avisa ni para
+])
+def test_sin_parar_el_aviso_de_cupo_es_el_de_siempre(cupo, uso, proveedor, aceptar, avisos):
+    pipeline, fijar, dichos = cupo
+    fijar(uso)
+    pipeline._avisar_si_no_alcanza_deepl([_DocCupo()], ["EN"], proveedor, aceptar_fallback=aceptar)
+    assert len(dichos) == avisos
+
+
+def test_el_comando_de_reintento_lleva_el_flag_si_se_uso():
+    from cli.main import _retry_command
+    base = {"source": "sources/modulo-21", "languages": ["EN"], "output": "Google Drive"}
+    assert "--accept-fallback" not in _retry_command(base)
+    assert "--accept-fallback" in _retry_command({**base, "accept_fallback": True})

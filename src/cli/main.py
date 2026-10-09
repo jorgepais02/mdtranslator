@@ -149,6 +149,8 @@ def _retry_command(config: dict, provider: str | None = None) -> str:
         partes.append(f"--provider {provider}")
     if config.get("source_lang"):
         partes.append(f"--source-lang {config['source_lang']}")
+    if config.get("accept_fallback"):
+        partes.append("--accept-fallback")
     partes.append("-y")
     return " ".join(partes)
 
@@ -262,6 +264,12 @@ def _remember_drive_folder(config) -> None:
         save_folder_id(elegida, config.get("drive_folder_name"), _lote_de_config(config))
 
 
+def _error_json(mensaje: str, codigo: int) -> None:
+    """El error en el formato de --json y sale. API: no vuelve."""
+    print(json.dumps({"status": "error", "error": mensaje, "files": []}))
+    sys.exit(codigo)
+
+
 def _run(args):
     if args.set_folder:
         sys.exit(run_set_folder())
@@ -320,13 +328,11 @@ def _run(args):
     except CLIError as e:
         # Ya viene redactado: sin el "Pipeline failed:" delante, que lo repetiría.
         if args.json:
-            print(json.dumps({"status": "error", "error": e.message, "files": []}))
-            sys.exit(e.exit_code)
+            _error_json(e.message, e.exit_code)
         raise
     except Exception as e:
         if args.json:
-            print(json.dumps({"status": "error", "error": str(e), "files": []}))
-            sys.exit(2)
+            _error_json(str(e), 2)
         console.print(f"\n[{RED}]✗ Pipeline failed: {e}[/{RED}]\n")
         sys.exit(2)
 
