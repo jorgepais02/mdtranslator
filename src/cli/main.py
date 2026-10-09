@@ -57,6 +57,8 @@ def parse_args():
     # "se ha dicho de quien" son dos preguntas distintas.
     parser.add_argument("--add-key", nargs="?", const="", default=None, metavar="PROVIDER",
                         help="add an API key to .env (deepl, azure, gemini, groq, cerebras)")
+    parser.add_argument("--accept-fallback", action="store_true",
+                        help="keep going with the next provider when DeepL has no quota left")
     parser.add_argument("--yes", "-y", action="store_true")
     parser.add_argument("--json",      action="store_true")
     parser.add_argument("--version",   action="version", version=f"mdtranslator {VERSION}")
@@ -311,9 +313,16 @@ def _run(args):
     try:
         # En modo --json la vista Live se manda a stderr para no contaminar stdout.
         with contextlib.redirect_stdout(sys.stderr) if args.json else contextlib.nullcontext():
+            config["accept_fallback"] = args.accept_fallback
             results = run_pipeline(config)
     except KeyboardInterrupt:
         _abort()
+    except CLIError as e:
+        # Ya viene redactado: sin el "Pipeline failed:" delante, que lo repetiría.
+        if args.json:
+            print(json.dumps({"status": "error", "error": e.message, "files": []}))
+            sys.exit(e.exit_code)
+        raise
     except Exception as e:
         if args.json:
             print(json.dumps({"status": "error", "error": str(e), "files": []}))

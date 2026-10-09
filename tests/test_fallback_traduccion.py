@@ -293,3 +293,39 @@ def test_el_aviso_de_cupo_entiende_una_lista_de_proveedores_y_un_plan_sin_tope(m
     monkeypatch.setattr(pipeline, "DeepLTranslator", lambda: DL((10, 0)))
     pipeline._avisar_si_no_alcanza_deepl([Doc()], ["EN"], "auto")
     assert dichos == []
+
+
+def test_sin_cupo_de_deepl_en_automatico_la_ejecucion_para_salvo_que_se_acepte(monkeypatch):
+    from cli import pipeline
+    from cli.errors import CLIError
+
+    class Doc:
+        src_lang = "es"
+        texts = ["una frase de cierto largo"]
+
+    class Cache:
+        def get(self, *a): return None
+
+    class DL:
+        def __init__(self, uso): self._uso = uso
+        def usage(self): return self._uso
+
+    dichos = []
+    monkeypatch.setattr(pipeline, "TranslationCache", Cache)
+    monkeypatch.setattr(pipeline.console, "print", lambda m, *a, **k: dichos.append(m))
+    monkeypatch.setattr(pipeline, "DeepLTranslator", lambda: DL((499_999, 500_000)))
+
+    with pytest.raises(CLIError, match="--accept-fallback"):
+        pipeline._avisar_si_no_alcanza_deepl([Doc()], ["EN"], "auto", parar=True)
+    assert dichos == []
+
+    # Aceptado, a mano o con cupo de sobra: sigue como antes, avisando
+    pipeline._avisar_si_no_alcanza_deepl([Doc()], ["EN"], "auto", parar=False)
+    assert len(dichos) == 1
+    dichos.clear()
+    pipeline._avisar_si_no_alcanza_deepl([Doc()], ["EN"], "deepl", parar=True)
+    assert len(dichos) == 1
+    dichos.clear()
+    monkeypatch.setattr(pipeline, "DeepLTranslator", lambda: DL((0, 500_000)))
+    pipeline._avisar_si_no_alcanza_deepl([Doc()], ["EN"], "auto", parar=True)
+    assert dichos == []

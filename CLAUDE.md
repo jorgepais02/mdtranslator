@@ -106,7 +106,7 @@ pytest -q
 ```
 
 Flags de `main.py`: `file`, `--lang`, `--provider {azure,deepl,auto}`, `--output {local,drive,both}`,
-`--all`, `--no-format`, `--source-lang`, `--set-folder`, `--new-folder [NOMBRE]`, `--add-key [PROVIDER]`, `--yes/-y`, `--json`,
+`--all`, `--no-format`, `--source-lang`, `--set-folder`, `--new-folder [NOMBRE]`, `--add-key [PROVIDER]`, `--accept-fallback`, `--yes/-y`, `--json`,
 `--version`.
 
 ---
@@ -414,7 +414,9 @@ pero es un hash):
 
 - **Antes de empezar**, `pipeline._avisar_si_no_alcanza_deepl` consulta `DeepLTranslator.usage()`
   —un GET que no gasta cupo— y lo compara con los caracteres que la caché de DeepL no tiene.
-  Si no llega, una línea amarilla lo dice
+  Si no llega y el proveedor es automático, **la ejecución para** con un `CLIError`: lo que sigue
+  saldría de Azure sin contexto. `--accept-fallback` sigue de todos modos; con DeepL elegido a
+  mano solo avisa (no hay fallback), como antes
 - **Al acabar**, cada resultado lleva `no_context` (los proveedores con `usa_contexto = False`
   que contestaron para ese documento) y `results.py` lo cuenta en **Warnings**, una fila por
   proveedor. Se anota en `CachingTranslator`, que está siempre —también con proveedor elegido
