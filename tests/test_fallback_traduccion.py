@@ -185,3 +185,111 @@ def test_modelos_de_respeta_el_orden_y_no_repite(monkeypatch):
     monkeypatch.setattr(registry, "orden_por_defecto",
                         lambda: ["gemini:m1", "groq", "gemini:m2", "gemini:m1", "gemini"])
     assert registry.modelos_de("gemini") == ["m1", "m2", registry.AVAILABLE_MODELS["gemini"]["default_model"]]
+
+
+# ── Aviso de lo traducido sin contexto y del cupo de DeepL ─────────────────────────────
+
+def test_el_registro_dice_que_proveedor_sin_contexto_contesto():
+    from translators.wrappers import CachingTranslator
+
+    class Cache:
+        def get(self, *a): return None
+        def set_many(self, *a): pass
+
+    class Sin(Falso):
+        usa_contexto = False
+
+    base.empezar_registro()
+    CachingTranslator(Falso("deepl", ["x"]), Cache()).translate(["a"], "EN")
+    assert base.quien_respondio_sin_contexto() == []
+    CachingTranslator(Sin("azure", ["x"]), Cache()).translate(["a"], "EN")
+    assert base.quien_respondio_sin_contexto() == ["azure"]
+
+
+def test_un_proveedor_que_falla_no_cuenta_como_que_contesto():
+    from translators.wrappers import CachingTranslator
+
+    class Cache:
+        def get(self, *a): return None
+        def set_many(self, *a): pass
+
+    class Sin(Falso):
+        usa_contexto = False
+
+    base.empezar_registro()
+    roto = Sin("azure", [TranslationError("500")])
+    with pytest.raises(TranslationError):
+        CachingTranslator(roto, Cache()).translate(["a"], "EN")
+    assert base.quien_respondio_sin_contexto() == []
+
+
+class _RespuestaUso:
+    def __init__(self, cuerpo): self._cuerpo = cuerpo
+    def raise_for_status(self): pass
+    def json(self): return self._cuerpo
+
+
+@pytest.mark.parametrize("cuerpo, esperado", [
+    ({"character_count": 120, "character_limit": 500_000}, (120, 500_000)),
+    (None, None),
+    ([], None),
+    ({"otra": 1}, None),
+])
+def test_usage_de_deepl_con_respuestas_raras(monkeypatch, cuerpo, esperado):
+    from translators.deepl import DeepLTranslator
+    monkeypatch.setattr("translators.deepl.requests.get", lambda *a, **k: _RespuestaUso(cuerpo))
+    assert DeepLTranslator(api_key="k:fx").usage() == esperado
+
+
+def test_el_aviso_de_cupo_solo_salta_si_no_alcanza(monkeypatch):
+    from cli import pipeline
+
+    class Doc:
+        src_lang = "es"
+        texts = ["hola mundo", "hola mundo", "adiós"]
+
+    class Cache:
+        def get(self, t, lang, prov): return "ya" if t == "adiós" else None
+
+    class DL:
+        def __init__(self, uso): self._uso = uso
+        def usage(self): return self._uso
+
+    dichos = []
+    monkeypatch.setattr(pipeline, "TranslationCache", Cache)
+    monkeypatch.setattr(pipeline.console, "print", lambda m, *a, **k: dichos.append(m))
+    monkeypatch.setattr(pipeline, "DeepLTranslator", lambda: DL((499_995, 500_000)))
+    pipeline._avisar_si_no_alcanza_deepl([Doc()], ["EN"], "auto")
+    assert len(dichos) == 1 and "5 of 500,000" in dichos[0] and "needs about 10" in dichos[0]
+
+    dichos.clear()
+    monkeypatch.setattr(pipeline, "DeepLTranslator", lambda: DL((0, 500_000)))
+    pipeline._avisar_si_no_alcanza_deepl([Doc()], ["EN"], "auto")
+    pipeline._avisar_si_no_alcanza_deepl([Doc()], ["EN"], "azure")
+    assert dichos == []
+
+
+def test_el_aviso_de_cupo_entiende_una_lista_de_proveedores_y_un_plan_sin_tope(monkeypatch):
+    from cli import pipeline
+
+    class Doc:
+        src_lang = "es"
+        texts = ["una frase"]
+
+    class Cache:
+        def get(self, *a): return None
+
+    class DL:
+        def __init__(self, uso): self._uso = uso
+        def usage(self): return self._uso
+
+    dichos = []
+    monkeypatch.setattr(pipeline, "TranslationCache", Cache)
+    monkeypatch.setattr(pipeline.console, "print", lambda m, *a, **k: dichos.append(m))
+    monkeypatch.setattr(pipeline, "DeepLTranslator", lambda: DL((499_999, 500_000)))
+    pipeline._avisar_si_no_alcanza_deepl([Doc()], ["EN"], ["deepl", "azure"])
+    assert len(dichos) == 1
+    dichos.clear()
+    monkeypatch.setattr(pipeline, "DeepLTranslator", lambda: DL((10, 0)))
+    pipeline._avisar_si_no_alcanza_deepl([Doc()], ["EN"], "auto")
+    assert dichos == []

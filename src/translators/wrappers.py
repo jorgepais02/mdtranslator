@@ -1,4 +1,4 @@
-from .base import BaseTranslator, TranslationError, call_translate
+from .base import BaseTranslator, TranslationError, anotar_respuesta, call_translate
 from .cache import TranslationCache
 
 
@@ -9,6 +9,7 @@ class CachingTranslator(BaseTranslator):
         self.translator = translator
         self.cache = cache
         self.name = translator.name
+        self.usa_contexto = translator.usa_contexto
 
     def translate(self, texts: list[str], target_lang: str,
                   source_lang: str | None = None,
@@ -52,4 +53,5 @@ class CachingTranslator(BaseTranslator):
                 results[idx] = tgt
             self.cache.set_many(fresh, target_lang, self.name)
 
+        anotar_respuesta(self)
         return results  # type: ignore[return-value]

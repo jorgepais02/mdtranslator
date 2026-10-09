@@ -68,6 +68,20 @@ class DeepLTranslator(BaseTranslator):
                 raise TranslationError(f"DeepL API request failed: {e}") from e
         raise TranslationError("DeepL API: max retries exceeded")
 
+    def usage(self) -> tuple[int, int] | None:
+        """Caracteres gastados y tope del mes: (usados, limite), o None si no se puede saber.
+
+        Es un GET que no gasta cupo. API: tupla | None.
+        """
+        try:
+            resp = requests.get(f"{self.base_url}/v2/usage", timeout=10,
+                                headers={"Authorization": f"DeepL-Auth-Key {self.api_key}"})
+            resp.raise_for_status()
+            datos = resp.json()
+            return int(datos["character_count"]), int(datos["character_limit"])
+        except (requests.exceptions.RequestException, KeyError, ValueError, TypeError):
+            return None
+
     def translate(self, texts: list[str], target_lang: str,
                   source_lang: str | None = None,
                   context: str | None = None) -> list[str]:

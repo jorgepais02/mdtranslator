@@ -216,6 +216,31 @@ def reiniciar_pausas() -> None:
         _PAUSAS.clear()
 
 
+# Quien respondio en esta llamada, por hilo: el pipeline pregunta tras traducir un
+# documento si alguna parte salio de un proveedor que no recibe el contexto, y asi puede
+# avisar de que ese documento merece una lectura. Se anota en CachingTranslator, que esta
+# siempre —tambien con un proveedor elegido a mano— y solo cuando el proveedor contesta.
+_RESPUESTAS = _threading.local()
+
+
+def empezar_registro() -> None:
+    """Borra lo anotado en este hilo. API: nada."""
+    _RESPUESTAS.sin_contexto = []
+
+
+def anotar_respuesta(traductor: "BaseTranslator") -> None:
+    """Anota a `traductor` si no usa contexto. API: nada."""
+    if not traductor.usa_contexto:
+        lista = getattr(_RESPUESTAS, "sin_contexto", None)
+        if lista is not None and traductor.name not in lista:
+            lista.append(traductor.name)
+
+
+def quien_respondio_sin_contexto() -> list[str]:
+    """Los proveedores sin contexto que contestaron desde empezar_registro. API: lista."""
+    return list(getattr(_RESPUESTAS, "sin_contexto", []))
+
+
 def dormir(segundos: float) -> None:
     """Duerme en pasos de un segundo, para que Ctrl+C siga cortando."""
     fin = _time.monotonic() + segundos
@@ -242,6 +267,9 @@ class BaseTranslator(ABC):
     """Abstract base class for all translation providers."""
 
     name: str = "unknown"
+    # Si el proveedor aprovecha `context`. El que no, traduce cada linea a ciegas y su
+    # resultado conviene leerlo (ver quien_respondio_sin_contexto).
+    usa_contexto: bool = True
 
     # Codigos que este proveedor escribe distinto, y los que sabe traducir. Se
     # rellenan desde translators/langs.py; vacios significa "los codigos de la

@@ -13,6 +13,7 @@ class AzureTranslator(BaseTranslator):
     """Translator strategy using Azure AI Translator API."""
 
     name = "azure"
+    usa_contexto = False
     lang_codes = PROVIDER_CODES["azure"]
     supported  = SUPPORTED["azure"]
     key_env    = "AZURE_TRANSLATOR_KEY"

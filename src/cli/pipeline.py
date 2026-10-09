@@ -17,7 +17,9 @@ from .styles import (console, elide as _elide, status_style as _status_style,
                      needs_refine)
 
 from translators import get_translator
-from translators.base import call_translate
+from translators.base import (TranslationError, call_translate, empezar_registro,
+                              quien_respondio_sin_contexto)
+from translators.deepl import DeepLTranslator
 from translators.cache import TranslationCache
 from document.refiner import (AVISO_SIN_CUOTA, es_aviso_de_cuota, fuera_de_su_alfabeto,
                               refine_markdown)
@@ -565,6 +567,46 @@ def _prepare_docs(files: list[Path], format_raw: bool, forced_lang: str | None =
     return docs, failures
 
 
+def _avisar_si_no_alcanza_deepl(docs, languages, provider) -> None:
+    """Dice antes de empezar si el cupo de DeepL no llega para lo que falta por traducir.
+
+    Pasó en el módulo 21: DeepL se agotó a mitad de la ejecución y los documentos
+    siguientes salieron de Azure, que no recibe el contexto, sin que nada lo anunciara.
+    Cuenta solo los caracteres que la caché no tiene; la consulta de uso no gasta cupo.
+    """
+    elegidos = [provider] if isinstance(provider, str) else list(provider or ["auto"])
+    if not {str(p).lower() for p in elegidos} & {"auto", "deepl"}:
+        return
+    try:
+        deepl = DeepLTranslator()
+    except TranslationError:
+        return
+    uso = deepl.usage()
+    if uso is None:
+        return
+    usados, tope = uso
+    if tope <= 0:           # plan sin tope: no hay cupo que agotar
+        return
+    cache = TranslationCache()
+    # Un conjunto por idioma y no uno por documento: dos documentos que comparten una
+    # linea la traducen una vez, la segunda sale de la cache.
+    pendientes: dict[str, set[str]] = {}
+    for doc in docs:
+        for lang in languages:
+            if doc.src_lang and lang.lower().split("-")[0] == doc.src_lang:
+                continue
+            pendientes.setdefault(lang, set()).update(
+                t for t in doc.texts if cache.get(t, lang, "deepl") is None)
+    necesarios = sum(len(t) for textos in pendientes.values() for t in textos)
+    quedan = tope - usados
+    if necesarios > quedan:
+        despues = ("The rest goes to the next provider, with no document context."
+                   if "auto" in {str(p).lower() for p in elegidos}
+                   else "With DeepL chosen by hand there is no fallback: the rest will fail.")
+        console.print(f"[{YELLOW}]⚠ DeepL has {quedan:,} of {tope:,} characters left this "
+                      f"month and this run needs about {necesarios:,}. {despues}[/{YELLOW}]")
+
+
 def run_pipeline(config: dict) -> list[dict]:
     languages  = config["languages"]
     source_cfg = config["source"]
@@ -599,6 +641,7 @@ def run_pipeline(config: dict) -> list[dict]:
     if not docs:
         return all_results
 
+    _avisar_si_no_alcanza_deepl(docs, languages, provider)
     translator = get_translator(provider)
     # La misma base que la caché de traducción: el refinamiento de Gemini es el trabajo
     # más caro y escaso de la ejecución, y sin guardarlo un lote que muere a la mitad
@@ -691,6 +734,7 @@ def run_pipeline(config: dict) -> list[dict]:
             ok      = True
             refined = True
             cambio  = None          # con que modelo se refino, si no fue el preferido
+            sin_contexto: list[str] = []   # proveedores que tradujeron sin recibir el contexto
             fuera   = []            # lineas que no estan en el alfabeto del idioma
             url     = None
             warning = doc.warning if is_source else None
@@ -709,8 +753,13 @@ def run_pipeline(config: dict) -> list[dict]:
                 if is_source:
                     new_content = doc.content if doc.content.endswith("\n") else doc.content + "\n"
                 else:
+                    empezar_registro()
                     translated = call_translate(translator, doc.texts, lang, doc.src_lang,
                                                 doc.contexto)
+                    # Un proveedor que no recibe el contexto elige mal las palabras con dos
+                    # sentidos (en M21, «ejecución» salió como pena de muerte); no se puede
+                    # arreglar desde aqui, pero si decir que ese documento merece lectura.
+                    sin_contexto = quien_respondio_sin_contexto()
                     rebuilt    = rebuild_markdown_from_translations(doc.parsed, translated)
 
                     if needs_refine(lang):
@@ -848,6 +897,7 @@ def run_pipeline(config: dict) -> list[dict]:
                 # Solo cuando contesto un modelo distinto del preferido: si salio del
                 # primero de la lista, decirlo seria ruido en todas las filas.
                 "refine_model": cambio,
+                "no_context": sin_contexto,
                 # Lo que en M19 y M20 se revisó a mano antes de subir: líneas que tendrían
                 # que haber cambiado de alfabeto y no lo hicieron. Se avisa y no se para,
                 # porque la línea puede ser un nombre que se queda como está.

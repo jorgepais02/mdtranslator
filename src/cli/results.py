@@ -270,6 +270,17 @@ def show_results(results: list[dict], total_time: float, version: str = VERSION,
         dicho = f"had {reason}" if reason == "no quota" else reason
         warnings.append(("", None, f"{cuantos} {plural} refined with {used} — "
                                    f"{instead_of} {dicho}"))
+    # Lo traducido por un proveedor que no recibe el contexto del documento: no es un
+    # fallo, pero es donde se cuelan las palabras con dos sentidos. Una linea por
+    # proveedor, como la del modelo de refinado, y no una por documento.
+    sin_contexto: dict[str, int] = {}
+    for r in results:
+        for nombre in r.get("no_context") or []:
+            sin_contexto[nombre] = sin_contexto.get(nombre, 0) + 1
+    for nombre, cuantos in sin_contexto.items():
+        plural = "document" if cuantos == 1 else "documents"
+        warnings.append(("", None, f"{cuantos} {plural} translated by {nombre.capitalize()} "
+                                   f"with no document context — worth a read"))
     if warnings:
         parts.append(Text("Warnings", style=f"bold {YELLOW}"))
         # Rejilla en vez de líneas sueltas: un aviso largo se partía y la segunda

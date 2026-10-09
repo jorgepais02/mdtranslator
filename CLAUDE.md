@@ -405,6 +405,19 @@ fallos distintos y el pipeline los trataba igual:
   salgan juntos) en vez de dar la tarea por fallida. Lo que vuelve más tarde (el
   `retryDelay` diario de Gemini son ~25 min) falla sin dormir.
 
+Dos avisos para que lo que sale de Azure no pase inadvertido (en M21 nadie supo qué
+documentos habían salido sin contexto, y la caché no lo dice: su clave lleva el proveedor
+pero es un hash):
+
+- **Antes de empezar**, `pipeline._avisar_si_no_alcanza_deepl` consulta `DeepLTranslator.usage()`
+  —un GET que no gasta cupo— y lo compara con los caracteres que la caché de DeepL no tiene.
+  Si no llega, una línea amarilla lo dice
+- **Al acabar**, cada resultado lleva `no_context` (los proveedores con `usa_contexto = False`
+  que contestaron para ese documento) y `results.py` lo cuenta en **Warnings**, una fila por
+  proveedor. Se anota en `CachingTranslator`, que está siempre —también con proveedor elegido
+  a mano—, y solo cuando el proveedor contesta. Una pasada que sale entera de la caché de
+  Azure sigue avisando, y con razón: es traducción de Azure
+
 `TranslationQuotaError` es un `TranslationError`, así que quien captura el segundo no cambia.
 El mensaje final sigue llevando «quota» y «429», que es lo que lee `main._retry_provider`.
 
