@@ -13,6 +13,7 @@ API:
     FallbackModel(modelos)   — recorre la lista; contesta el primero que puede
     es_cuota(error)          — True si el error es de cuota
     espera_pedida(error)     — segundos que pide un 429, o None si no es cuota
+    segundos_pedidos(error)  — lo que pide la API, crudo, o None si no lo dice
     PISTAS_CUOTA             — lo que se lee como "no queda cuota", aqui y en el aviso
     cambio_de_modelo(modelo) — quien contesto, si no fue el preferido
 """
@@ -68,6 +69,11 @@ def _pedidos_crudos(error: Exception) -> float | None:
         return float(pedidos)
     m = _RETRY_DELAY_RE.search(str(error)) or _TRY_AGAIN_RE.search(str(error))
     return float(m.group(1)) if m else None
+
+
+def segundos_pedidos(error: Exception) -> float | None:
+    """Los segundos que pide la API, tal cual. API: float|None."""
+    return _pedidos_crudos(error)
 
 
 def espera_pedida(error: Exception) -> int | None:

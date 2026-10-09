@@ -1,7 +1,8 @@
 import os
 import time
 import requests
-from .base import BaseTranslator, TranslationError, chunk_texts
+from .base import (BaseTranslator, TranslationError, TranslationQuotaError, chunk_texts,
+                   dormir, en_pausa, espera_ante_429)
 from .langs import PROVIDER_CODES, SUPPORTED
 
 _MAX_RETRIES = 3
@@ -37,11 +38,21 @@ class DeepLTranslator(BaseTranslator):
 
     def _post_with_retry(self, payload: dict, headers: dict) -> list[str]:
         for attempt in range(_MAX_RETRIES):
+            dormir(en_pausa(self.name))
             try:
                 resp = requests.post(self.translate_url, json=payload, headers=headers, timeout=60)
                 if resp.status_code == 456:
-                    raise TranslationError("DeepL quota exceeded.")
-                if resp.status_code in (429, 500, 502, 503, 504):
+                    # La cuota mensual no trae fecha de vuelta: sin retry_after el
+                    # fallback deja a DeepL fuera el resto de la ejecucion.
+                    raise TranslationQuotaError("DeepL quota exceeded.")
+                if resp.status_code == 429:
+                    espera = espera_ante_429(self.name, resp, attempt)
+                    if attempt < _MAX_RETRIES - 1:
+                        dormir(espera)
+                        continue
+                    raise TranslationQuotaError("DeepL API request failed: 429 Too Many Requests",
+                                                retry_after=espera)
+                if resp.status_code in (500, 502, 503, 504):
                     if attempt < _MAX_RETRIES - 1:
                         delay = int(resp.headers.get("Retry-After", _BASE_DELAY * (2 ** attempt)))
                         time.sleep(delay)

@@ -12,6 +12,7 @@ API:
     parse_ref(ref)            — "gemini:gemini-3.5-flash" -> ("gemini", "gemini-3.5-flash")
     orden_por_defecto()       — el orden de config.json, o el de fabrica
     modelo_de(pid)            — con que modelo de ese proveedor: lo que diga el orden
+    modelos_de(pid)           — todos los de ese proveedor, en el orden de la lista
     get_model(orden=None)     — el AIModel (o FallbackModel) que hay que usar
 CLI:
     python -m src.ai.registry [--check]
@@ -131,6 +132,23 @@ def modelo_de(pid: str) -> str:
         if suyo == pid:
             return modelo or entrada.get("default_model", "")
     return entrada.get("default_model", "")
+
+
+def modelos_de(pid: str) -> list[str]:
+    """Todos los modelos de ese proveedor, en el orden de la lista. API: lista de ids.
+
+    Para quien necesita cambiar de modelo dentro del proveedor: la cuota de Google se
+    cuenta por modelo, asi que el traductor Gemini, cuando se queda sin cupo en uno,
+    tiene los otros de la misma cuenta.
+    """
+    entrada = AVAILABLE_MODELS.get(pid, {})
+    modelos: list[str] = []
+    for ref in orden_por_defecto():
+        suyo, modelo = parse_ref(ref)
+        modelo = modelo or entrada.get("default_model", "")
+        if suyo == pid and modelo and modelo not in modelos:
+            modelos.append(modelo)
+    return modelos or [entrada.get("default_model", "")]
 
 
 def get_model(orden: list[str] | str | None = None) -> AIModel:

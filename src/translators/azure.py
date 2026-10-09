@@ -1,7 +1,8 @@
 import os
 import time
 import requests
-from .base import BaseTranslator, TranslationError, chunk_texts
+from .base import (BaseTranslator, TranslationError, TranslationQuotaError, chunk_texts,
+                   dormir, en_pausa, espera_ante_429)
 from .langs import PROVIDER_CODES, SUPPORTED
 
 _MAX_RETRIES = 4
@@ -39,6 +40,9 @@ class AzureTranslator(BaseTranslator):
 
     def _post_with_retry(self, params: dict, payload: list, headers: dict) -> list:
         for attempt in range(_MAX_RETRIES):
+            # Si otro hilo acaba de recibir un 429, se espera a su pausa en vez de
+            # reintentar por cuenta propia: cuatro hilos chocando a la vez no ayudan.
+            dormir(en_pausa(self.name))
             try:
                 resp = requests.post(
                     self.translate_url, params=params, json=payload,
@@ -47,15 +51,25 @@ class AzureTranslator(BaseTranslator):
                 if resp.status_code == 403:
                     msg = "Azure API Error (403). Check your tier quota or valid region."
                     if "out of call volume quota" in resp.text.lower():
-                        msg += " Quota exceeded."
+                        raise TranslationQuotaError(msg + " Quota exceeded.")
                     raise TranslationError(msg)
-                if resp.status_code in (429, 500, 502, 503, 504):
+                if resp.status_code == 429:
+                    espera = espera_ante_429(self.name, resp, attempt)
+                    if attempt < _MAX_RETRIES - 1:
+                        dormir(espera)
+                        continue
+                    raise TranslationQuotaError(
+                        f"Azure API request failed: 429 Too Many Requests — {resp.text}",
+                        retry_after=espera)
+                if resp.status_code in (500, 502, 503, 504):
                     if attempt < _MAX_RETRIES - 1:
                         retry_after = int(resp.headers.get("Retry-After", _BASE_DELAY * (2 ** attempt)))
                         time.sleep(retry_after)
                         continue
                 resp.raise_for_status()
                 return [item["translations"][0]["text"] for item in resp.json()]
+            except TranslationError:
+                raise
             except requests.exceptions.RequestException as e:
                 if attempt < _MAX_RETRIES - 1:
                     time.sleep(_BASE_DELAY * (2 ** attempt))

@@ -1,7 +1,8 @@
 import os
 import re
 from .langs import PROVIDER_CODES, SUPPORTED
-from .base import BaseTranslator, TranslationError
+from .base import (BaseTranslator, TranslationError, TranslationQuotaError, SIN_FECHA,
+                   en_pausa, pausar)
 
 _NUM_PREFIX_RE = re.compile(r"^\d+\.\s*")
 
@@ -9,10 +10,10 @@ _NUM_PREFIX_RE = re.compile(r"^\d+\.\s*")
 class GeminiTranslator(BaseTranslator):
     """Translator using Gemini with a technical translation prompt.
 
-    El modelo lo dice el registro de src/ai/, pero **sin** fallback a otro modelo: en
-    el menu esto es el proveedor "Gemini (Google AI)", la traduccion ya tiene su
-    propio fallback por proveedor, y cambiarle el motor por dentro seria traducir con
-    otra cosa sin decirlo.
+    Los modelos los dice el registro de src/ai/. Cuando uno se queda sin cuota pasa al
+    siguiente de la misma cuenta —el cupo gratuito se cuenta por modelo, 20 peticiones
+    al dia—, y solo por cuota: un fallo de otra clase no cambia de modelo. Sigue siendo
+    Gemini; lo que no hace es caer en Groq o Cerebras, que no traducen.
     """
 
     name = "gemini"
@@ -48,15 +49,15 @@ class GeminiTranslator(BaseTranslator):
         # Perezoso como el del SDK: saber quien tiene clave no deberia arrastrar el
         # registro de modelos ni google.genai.
         try:
-            from ..ai.registry import modelo_de
+            from ..ai.registry import modelos_de
         except ImportError:
-            from ai.registry import modelo_de
+            from ai.registry import modelos_de
         self._api_key = api_key or os.getenv("GEMINI_API_KEY", "")
         if not self._api_key:
             raise TranslationError("GEMINI_API_KEY not found in .env")
         self._client = genai.Client(api_key=self._api_key)
         self._types = _types
-        self._model = model or modelo_de("gemini")
+        self._models = [model] if model else modelos_de("gemini")
 
     def translate(self, texts: list[str], target_lang: str,
                   source_lang: str | None = None,
@@ -82,13 +83,7 @@ class GeminiTranslator(BaseTranslator):
             if src_name:
                 prompt = f"The source text is written in {src_name}.\n" + prompt
             try:
-                response = self._client.models.generate_content(
-                    model=self._model, contents=prompt,
-                    # Ver ai/gemini.py: sin esto el SDK avisa por stderr en cada
-                    # ejecucion y el aviso cae encima de la vista Live.
-                    config=self._types.GenerateContentConfig(
-                        automatic_function_calling=(
-                            self._types.AutomaticFunctionCallingConfig(disable=True))))
+                response = self._generar(prompt)
                 lines = [l.strip() for l in response.text.strip().splitlines() if l.strip()]
                 # If Gemini added commentary or blank lines, try keeping only numbered lines
                 if len(lines) != len(chunk):
@@ -105,3 +100,35 @@ class GeminiTranslator(BaseTranslator):
                 raise TranslationError(f"Gemini API request failed: {e}") from e
 
         return results
+
+    def _generar(self, prompt: str):
+        """La respuesta del primer modelo con cuota. Si no queda ninguno, TranslationQuotaError."""
+        try:
+            from ..ai.base import es_cuota, segundos_pedidos
+        except ImportError:
+            from ai.base import es_cuota, segundos_pedidos
+        ultimo: Exception | None = None
+        for modelo in self._models:
+            clave = f"gemini:{modelo}"
+            if en_pausa(clave) > 0:
+                continue
+            try:
+                return self._client.models.generate_content(
+                    model=modelo, contents=prompt,
+                    # Ver ai/gemini.py: sin esto el SDK avisa por stderr en cada
+                    # ejecucion y el aviso cae encima de la vista Live.
+                    config=self._types.GenerateContentConfig(
+                        automatic_function_calling=(
+                            self._types.AutomaticFunctionCallingConfig(disable=True))))
+            except Exception as e:
+                if not es_cuota(e):
+                    raise
+                # Un 429 diario trae retryDelay de ~25 min: ese modelo no vuelve en esta
+                # ejecucion y no merece otra peticion. Sin numero, un minuto.
+                pausar(clave, segundos_pedidos(e) or 60)
+                ultimo = e
+        restan = [r for m in self._models if (r := en_pausa(f"gemini:{m}")) > 0]
+        raise TranslationQuotaError(
+            f"Gemini API request failed: 429 no quota left on {len(self._models)} "
+            f"model(s)" + (f" — {ultimo}" if ultimo else ""),
+            retry_after=min(restan) if restan else SIN_FECHA)
