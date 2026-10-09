@@ -75,6 +75,47 @@ def parte_de(nombre: str) -> str:
     return f"({m.group(1)})" if m else ""
 
 
+_NUMERO_RE = re.compile(
+    r"\b(dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\s+"
+    r"(bloques|categorías|fases|pasos|apartados|partes|secciones|puntos|ejes|pilares|"
+    r"etapas|niveles|principios)\b", re.I)
+_NUMEROS = {"dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7,
+            "ocho": 8, "nueve": 9, "diez": 10, "once": 11, "doce": 12}
+_ITEM_RE = re.compile(r"(?:[-*+]|\d+[.)])\s+\S")
+
+
+def cuentas_que_no_cuadran(md: str) -> list[str]:
+    """Las veces que el texto dice «seis bloques» y la lista de debajo tiene otros tantos.
+
+    Las notas salen de una charla hablada y el ponente se equivoca al contar: en el módulo
+    21 anunció seis bloques y dio cinco, y nueve categorías y dio ocho. Ese error se
+    traduce a todos los idiomas. Solo avisa, no corrige: lo dicho es del ponente. Cuenta
+    solo el primer nivel de la lista que sigue a la frase y solo números en letra, porque
+    «38 controles agrupados en nueve categorías» no es una lista de 38. API: avisos, [] si
+    todo cuadra.
+    """
+    lineas = md.splitlines()
+    avisos = []
+    for i, linea in enumerate(lineas):
+        m = _NUMERO_RE.search(linea)
+        if not m:
+            continue
+        j = i + 1
+        while j < len(lineas) and not lineas[j].strip():
+            j += 1
+        if j >= len(lineas) or not _ITEM_RE.match(lineas[j]):
+            continue
+        items = 0
+        while j < len(lineas) and (not lineas[j].strip() or _ITEM_RE.match(lineas[j])
+                                   or lineas[j].startswith((" ", "\t"))):
+            items += bool(_ITEM_RE.match(lineas[j]))
+            j += 1
+        dicho = _NUMEROS[m.group(1).lower()]
+        if items != dicho:
+            avisos.append(f"says \"{m.group(0)}\" and lists {items}")
+    return avisos
+
+
 def quita_la_parte(md: str) -> str:
     """El Markdown con el "(II)" fuera del título. API: str.
 

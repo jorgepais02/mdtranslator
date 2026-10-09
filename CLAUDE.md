@@ -433,6 +433,14 @@ inspecciona la firma (`inspect.signature`, cacheado por clase) y solo pasa el te
 argumento si el proveedor lo acepta. Un traductor externo escrito contra la firma original
 sigue funcionando sin tocarlo. **Si tocas esto, mantén esa garantía.**
 
+### Las cuentas de la charla se comprueban
+Las notas salen de una charla hablada y el ponente cuenta mal: en el módulo 21 anunció seis
+bloques y dio cinco, y nueve categorías y dio ocho. Eso se traduce a todos los idiomas.
+`parser.cuentas_que_no_cuadran()` compara «seis bloques» con los elementos de primer nivel de
+la lista que sigue, y `_prepare_one` lo deja como aviso en la fila del documento origen. Solo
+avisa: lo dicho es del ponente y corregirlo sería inventar. Solo números en letra: «38
+controles agrupados en nueve categorías» no es una lista de 38.
+
 ### Detección del idioma origen
 `detect_source_language()` analiza solo el texto traducible (sin almohadillas, tuberías de
 tabla ni URLs) y exige `MIN_LANG_CONFIDENCE = 0.90`. Si no llega, devuelve `(None, aviso)`

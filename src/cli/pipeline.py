@@ -24,7 +24,8 @@ from translators.deepl import DeepLTranslator
 from translators.cache import TranslationCache
 from document.refiner import (AVISO_SIN_CUOTA, es_aviso_de_cuota, fuera_de_su_alfabeto,
                               refine_markdown)
-from core.parser import (conserva_la_parte, contexto_del_documento, parse_markdown_lines,
+from core.parser import (conserva_la_parte, contexto_del_documento, cuentas_que_no_cuadran,
+                         parse_markdown_lines,
                          quita_la_parte, rebuild_markdown_from_translations)
 from core.docgen import generate_docx_document, convert_many_to_pdf
 from core.config import TRANSLATED_DIR, DRIVE_FOLDER_ID, CONFIG
@@ -532,6 +533,10 @@ def _prepare_one(path: Path, format_raw: bool, forced_lang: str | None,
         doc.texts  = [text for _, _pfx, text in doc.parsed if text]
     except Exception as e:
         return _failure(path, f"Could not parse {path.name}: {e}")
+
+    # Un error de la charla, no de la traducción: se avisa en la fila del documento origen.
+    for cuenta in cuentas_que_no_cuadran(content):
+        doc.warning = "; ".join(w for w in (doc.warning, f"{path.name} {cuenta}") if w)
 
     if forced_lang:
         doc.src_lang = forced_lang.lower().split("-")[0]
